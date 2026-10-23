@@ -65,6 +65,8 @@ var mutants = []mutant{
 	{"freeze removal ignored", "check.go", "\t\t\tcase !ok:\n\t\t\t\tprobs = append(probs, fmt.Sprintf(\"%s: D%d was removed", "\t\t\tcase false && !ok:\n\t\t\t\tprobs = append(probs, fmt.Sprintf(\"%s: D%d was removed"},
 	{"never-committed card ok", "check.go", "\t\t\tif status != \"\" && status != \"todo\" {", "\t\t\tif false {"},
 	{"freeze follows renames", "git.go", "\tout, good := Git(root, \"log\", \"--diff-filter=A\", \"--format=%H\", \"--\", rel)", "\tout, good := Git(root, \"log\", \"--diff-filter=A\", \"--follow\", \"--format=%H\", \"--\", rel)"},
+	{"staged card not a freeze point", "check.go", "\t\t\t\tif _, inIndex := Git(root, \"cat-file\", \"-e\", \":\"+card.Rel); inIndex {", "\t\t\t\tif _, inIndex := Git(root, \"cat-file\", \"-e\", \":\"+card.Rel); false && inIndex {"},
+	{"staged exemption outside the hook", "check.go", "\treturn freezeCheck(root, cfg, cards, false, w)", "\treturn freezeCheck(root, cfg, cards, true, w)"},
 	{"legacy growth ignored", "check.go", "\t\t\tif len(grown) > 0 {", "\t\t\tif false {"},
 	{"stale legacy entry ignored", "check.go", "\tif len(stale) > 0 && len(cards) == 0 {", "\tif false {"},
 	{"legacy cards linted", "card.go", "\t\tif !legacy[filepath.Base(p)] {", "\t\tif true {"},

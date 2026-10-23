@@ -61,7 +61,14 @@ func Lint(root string, cfg *Config, cards []string, w io.Writer) error {
 // FreezeCheck compares every card's done-definition with the commit that
 // opened it. Criteria may be added; changing or removing one needs an
 // author-confirmed entry under `## 修订`.
+// FreezeCheck: in the pre-commit hook (staged=true) a card staged in the
+// commit being made is frozen by that commit, so the opening commit itself
+// can pass; everywhere else a card must already be in history.
 func FreezeCheck(root string, cfg *Config, cards []string, w io.Writer) error {
+	return freezeCheck(root, cfg, cards, false, w)
+}
+
+func freezeCheck(root string, cfg *Config, cards []string, staged bool, w io.Writer) error {
 	paths := cards
 	if len(paths) == 0 {
 		paths = CardPaths(root, cfg)
@@ -104,6 +111,11 @@ func FreezeCheck(root string, cfg *Config, cards []string, w io.Writer) error {
 			return err
 		}
 		if !ok {
+			if staged {
+				if _, inIndex := Git(root, "cat-file", "-e", ":"+card.Rel); inIndex {
+					continue // this commit is the freeze point
+				}
+			}
 			if status != "" && status != "todo" {
 				probs = append(probs, fmt.Sprintf("%s: status `%s` but the card was never committed; commit the card (the freeze point) before implementing", card.Rel, status))
 			}

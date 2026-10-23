@@ -10,14 +10,14 @@
 
 ```toml
 [keel]
-version = "1.0.0"
+version = "1.0.1"
 ```
 
 安装钉住的版本（任选一种）：
 
 ```bash
 mise install                                             # 推荐：mise.toml 里已写好 "github:visual-z/keel"
-go install github.com/visual-z/keel/cmd/keel@v1.0.0      # 有 Go 工具链时
+go install github.com/visual-z/keel/cmd/keel@v1.0.1      # 有 Go 工具链时
 # 或从 GitHub Release 下载对应平台的二进制，核对 checksums.txt
 ```
 
@@ -127,7 +127,7 @@ JUnit 报告里的 `<error>`（setup、collection 出错）、重复的 testcase
 
 ```toml
 [keel]
-version = "1.0.0"             # 必填：钉住的 keel 版本
+version = "1.0.1"             # 必填：钉住的 keel 版本
 
 [[gate.step]]                 # 按顺序执行；第一条失败即停
 name = "test"

@@ -18,7 +18,38 @@ stderr 'pre-commit: lint failed'
 exec git log --format=%s -1
 stdout 'chore: adopt keel'
 
+
+# The opening commit of a card is its freeze point: the hook lets it through
+# even though the card is not in history yet.
+exec git reset -q
+exec rm docs/tasks/fix-new.md
+cp opening.txt docs/tasks/fix-open.md
+exec git add docs/tasks/fix-open.md
+exec git commit -q -m 'docs(tasks): open fix-open'
+exec git log --format=%s -1
+stdout 'docs\(tasks\): open fix-open'
+
+# Outside the hook a started, uncommitted card still has no freeze point.
+# Staged is not enough outside the hook: only a commit freezes a card.
+cp opening.txt docs/tasks/fix-later.md
+exec git add docs/tasks/fix-later.md
+! exec keel freeze-check
+stderr 'fix-later.md: status `doing` but the card was never committed'
+
 -- agents.txt --
 map
 -- sloppy.txt --
 # sloppy
+-- opening.txt --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+x
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据

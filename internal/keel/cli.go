@@ -301,7 +301,7 @@ func dispatch(root, cmd string, args []string, stdout, stderr io.Writer) error {
 				fn   func() error
 			}{
 				{"lint", func() error { return Lint(root, cfg, nil, stdout) }},
-				{"freeze-check", func() error { return FreezeCheck(root, cfg, nil, stdout) }},
+				{"freeze-check", func() error { return freezeCheck(root, cfg, nil, true, stdout) }},
 				{"check-docs", func() error { return CheckDocs(root, cfg, stdout) }},
 				{"check-boundaries", func() error { return CheckBoundaries(root, cfg, stdout) }},
 				{"assert-guard", func() error { return AssertGuard(root, cfg, "", stdout) }},
