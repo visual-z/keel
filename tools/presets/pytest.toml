@@ -1,0 +1,56 @@
+# keel 预设：Python / pytest。
+[project]
+name = "{{PROJECT_NAME}}"
+stack = "pytest"
+
+[[gate.step]]
+name = "test"
+cmd = ["python3", "-m", "pytest", "-q"]
+runner = "pytest"
+
+[[gate.step]]
+name = "boundaries"
+cmd = ["python3", "tools/keel.py", "check-boundaries"]
+
+[[gate.step]]
+name = "docs"
+cmd = ["python3", "tools/keel.py", "check-docs"]
+
+[[gate.step]]
+name = "cards"
+cmd = ["python3", "tools/keel.py", "lint"]
+
+[[gate.step]]
+name = "freeze"
+cmd = ["python3", "tools/keel.py", "freeze-check"]
+
+[guard]
+base = "main"
+
+[docs]
+agents_max_lines = 150     # AGENTS.md 是地图不是百科；超了就把细节下沉或机械化
+playbook_max_rules = 120   # 规则只增不减会撞墙；超了就合并或改写成检查
+glossary_source_dirs = []  # 填源码目录后，CONTEXT.md「避免」列的词在源码中出现即失败
+
+# 边界规则：正则级的「Never」。每条新规则都要先故意违规一次确认它会红。
+# [[boundary.rule]]
+# name = "core 不做 I/O"
+# paths = ["src/core/**"]
+# forbid = ["⟨禁用的 import 正则⟩"]
+
+[red]
+runner = "pytest"
+command = ["python3", "-m", "pytest", "-q", "-p", "no:cacheprovider", "-k", "{filter}"]
+link = [".venv"]
+env = {}
+timeout_s = 1800
+
+[tests]
+paths = ["tests/**", "**/test_*.py", "**/*_test.py"]
+assert_patterns = ['\bassert\b', '\bself\.assert\w*\(', '\bpytest\.raises\(']
+skip_patterns = ['pytest\.mark\.(skip|xfail)', '\bunittest\.skip', '\bpytest\.skip\(']
+# 早退出与「永远相等」：两种已被记录的 reward hacking 手法
+suspicious_patterns = ['\bsys\.exit\(', '\bos\._exit\(', 'def __eq__']
+
+[mutate]
+command = ["mutmut", "run"]

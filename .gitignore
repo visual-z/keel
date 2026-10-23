@@ -1,0 +1,5 @@
+# keel: logs and private caches never enter the repository
+.keel/
+__pycache__/
+*.pyc
+.DS_Store

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Fast checks only; the full gate runs before a card is marked done and in CI.
+set -e
+keel() { python3 tools/keel.py "$@"; }
+keel lint
+keel freeze-check
+keel check-docs
+keel check-boundaries
+keel assert-guard

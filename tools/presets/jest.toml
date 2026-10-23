@@ -1,0 +1,60 @@
+# keel 预设：TypeScript / jest。
+[project]
+name = "{{PROJECT_NAME}}"
+stack = "jest"
+
+[[gate.step]]
+name = "typecheck"
+cmd = ["npx", "tsc", "--noEmit"]
+
+[[gate.step]]
+name = "test"
+cmd = ["npx", "jest"]
+runner = "jest"
+
+[[gate.step]]
+name = "boundaries"
+cmd = ["python3", "tools/keel.py", "check-boundaries"]
+
+[[gate.step]]
+name = "docs"
+cmd = ["python3", "tools/keel.py", "check-docs"]
+
+[[gate.step]]
+name = "cards"
+cmd = ["python3", "tools/keel.py", "lint"]
+
+[[gate.step]]
+name = "freeze"
+cmd = ["python3", "tools/keel.py", "freeze-check"]
+
+[guard]
+base = "main"
+
+[docs]
+agents_max_lines = 150     # AGENTS.md 是地图不是百科；超了就把细节下沉或机械化
+playbook_max_rules = 120   # 规则只增不减会撞墙；超了就合并或改写成检查
+glossary_source_dirs = []  # 填源码目录后，CONTEXT.md「避免」列的词在源码中出现即失败
+
+# 边界规则：正则级的「Never」。每条新规则都要先故意违规一次确认它会红。
+# [[boundary.rule]]
+# name = "core 不做 I/O"
+# paths = ["src/core/**"]
+# forbid = ["⟨禁用的 import 正则⟩"]
+
+[red]
+runner = "jest"
+command = ["npx", "jest", "-t", "{filter}"]
+link = ["node_modules"]   # 临时 worktree 没有依赖；缺依赖时加载失败会被误读成红
+env = {}
+timeout_s = 1800
+
+[tests]
+paths = ["**/*.test.*", "**/*.spec.*", "test/**", "tests/**", "__tests__/**"]
+assert_patterns = ['\bexpect\(', '\bassert(\.\w+)?\(']
+skip_patterns = ['\b(it|test|describe)\.(skip|todo|only)\(', '\bx(it|describe)\(', '\bf(it|describe)\(']
+suspicious_patterns = ['\bprocess\.exit\(']
+
+[mutate]
+# StrykerJS 没有 since：用 diff 生成 --mutate 列表，配合 --incremental
+command = []
