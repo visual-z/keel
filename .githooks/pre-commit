@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fast checks only; the full gate runs before a card is marked done and in CI.
+# Fast checks only. There is no CI: the full gate and verify-red run locally before a card is marked done.
 set -e
 keel() { python3 tools/keel.py "$@"; }
 keel lint

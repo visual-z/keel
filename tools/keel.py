@@ -1103,6 +1103,8 @@ def cmd_init(root: Path, cfg: dict, args) -> None:
     stub = root / "README.project.md"
     if stub.exists():
         shutil.move(stub, root / "README.md")
+        # The other-language README describes the template, not the new project.
+        (root / "README.zh-CN.md").unlink(missing_ok=True)
     progress = root / "docs" / "PROGRESS.md"
     if progress.exists():
         lines = progress.read_text(encoding="utf-8").split("\n## ")[0]

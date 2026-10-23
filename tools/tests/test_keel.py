@@ -478,6 +478,27 @@ class Boundaries(RepoCase):
         self.assertKeelFails(["check-boundaries"], "core is pure")
 
 
+class Init(RepoCase):
+    def test_init_turns_the_template_into_a_named_project(self):
+        real = Path(__file__).resolve().parent.parent.parent
+        for rel in ("tools/presets/cargo.toml", "README.md", "README.zh-CN.md", "README.project.md",
+                    "AGENTS.md", "PLAN.md", "CONTEXT.md", "docs/PROGRESS.md"):
+            self.r.write(rel, (real / rel).read_text(encoding="utf-8"))
+        self.assertKeelPasses(["init", "--name", "demo", "--stack", "cargo"])
+        root = self.r.root
+        self.assertFalse((root / "README.zh-CN.md").exists())
+        self.assertFalse((root / "README.project.md").exists())
+        self.assertTrue((root / "README.md").read_text(encoding="utf-8").startswith("# demo"))
+        self.assertIn('name = "demo"', (root / "keel.toml").read_text(encoding="utf-8"))
+        for rel in ("AGENTS.md", "PLAN.md", "CONTEXT.md"):
+            self.assertNotIn("{{PROJECT_NAME}}", (root / rel).read_text(encoding="utf-8"), rel)
+        self.assertEqual(self.r.git("config", "core.hooksPath"), ".githooks")
+
+    def test_init_rejects_an_unknown_stack(self):
+        self.r.write("tools/presets/cargo.toml", "")
+        self.assertKeelFails(["init", "--name", "demo", "--stack", "cobol"], "available: cargo")
+
+
 class Runners(unittest.TestCase):
     def test_cargo_compile_errors_are_not_red_and_counts_sum_across_binaries(self):
         self.assertIsNotNone(keel.parse_cargo("error[E0425]: cannot find value").invalid)

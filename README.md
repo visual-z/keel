@@ -1,75 +1,107 @@
 # keel
 
-和项目无关的工作区模板：所有新项目从这里开始。
+**English** | [中文](README.zh-CN.md)
 
-keel 把每张任务卡当作一个**待证明的命题**：完成定义是规约，测试是证明，`tools/keel.py` 是证明检查器。
-卡上的每条声明，例如「这个测试修复前是红的」「完成定义没有放宽」「gate 全绿」，都由 keel 从 git 和真实的退出码重新推出来，不采信叙述。
+A project-agnostic workspace template, meant to be the starting point for every new project.
 
-设计依据见 [docs/PRINCIPLES.md](docs/PRINCIPLES.md)，主要来自以下几方面：
+keel treats each task card as a **claim to be proven**. The definition of done is the specification, the tests are the proof, and `tools/keel.py` is the proof checker. keel re-derives every claim a card makes from git and from real exit codes, and never takes the card's word for it. Typical claims are "this test was red before the fix", "the definition of done was not relaxed" and "the gate passed".
 
-- 形式化验证的几条经验：短规约、只信检查器、警惕空洞证明、注错比随机测试抓到更多 bug、观测面会被截断、规约要和现实对拍、冗长会撞墙。
-- 长时 agent harness 和 harness engineering 的实践。
-- 社区对 agent「看起来完成」类捷径（reward hacking）的研究。
+## Why
 
-## 开始一个新项目
+Letting a coding agent report its own "done" is unreliable. The usual shortcuts are:
+
+- deleting assertions or adding skips;
+- exiting the process before the asserts run;
+- loosening the acceptance criteria;
+- writing a test that was never red.
+
+People under deadline pressure take the same shortcuts. keel's answer is to **trust only the checker**: a claim that a machine cannot re-verify does not count.
+
+[docs/PRINCIPLES.md](docs/PRINCIPLES.md) explains the design. Each principle names its source and the mechanism that implements it. The sources are lessons from formal verification at scale, long-running agent harnesses, harness engineering, and research on reward hacking in coding agents. The principles document is written in Chinese, like the rest of the process docs. The code and its comments are in English.
+
+## Start a new project
 
 ```bash
-gh repo create <name> --private --template <owner>/keel --clone
+gh repo create <name> --private --template visual-z/keel --clone
 cd <name>
 python3 tools/keel.py init --name <name> --stack <cargo|go|bun|vitest|jest|pytest>
 ```
 
-`init` 会做这些事：
+`init` does the following:
 
-- 用 `tools/presets/<stack>.toml` 生成 `keel.toml`；
-- 替换 `{{PROJECT_NAME}}`；
-- 把 `README.project.md` 换成你的 README；
-- 启用 `.githooks`；
-- 在 `docs/PROGRESS.md` 里记一笔。
+- writes `keel.toml` from `tools/presets/<stack>.toml`;
+- replaces `{{PROJECT_NAME}}`;
+- swaps this README for a project README;
+- enables `.githooks`;
+- adds an entry to `docs/PROGRESS.md`.
 
-然后把 `AGENTS.md`、`PLAN.md`、`CONTEXT.md` 里的 `⟨…⟩` 占位符填掉，开第一张卡：
+Next, fill in the `⟨…⟩` placeholders in `AGENTS.md`, `PLAN.md` and `CONTEXT.md`, then open your first card:
 
 ```bash
 python3 tools/keel.py new feat skeleton
 ```
 
-需要 Python 3.11+ 和 git，不需要安装别的东西。
+The only requirements are Python 3.11+ and git.
 
-## 里面有什么
+## What keel checks
+
+| Command | The claim it verifies |
+|---|---|
+| `verify-red <card>` | *"This test was red before the fix."* keel re-runs the test in a throwaway worktree at the RED commit, where it must fail, and then in the working tree, where it must pass. Compile errors, load errors, filters that select zero tests, and timeouts do not count as red. |
+| `verify-red` (fault patch) | *"The tests really catch this bug."* keel applies the card's `keel-inject` patch on top of HEAD, and the tests must go red. The patch may only touch product code, never tests. |
+| `freeze-check` | *"The definition of done was not relaxed."* keel compares the card with the commit that opened it, which is the freeze point. Criteria may only be added. Changing one needs an author-confirmed entry under `## 修订` (revisions). |
+| `assert-guard` | *"No test was weakened."* keel scans the diff for removed assertions, new skip/only markers, early exits and `__eq__` overrides in tests, and deleted test files. |
+| `gate --record <card>` | *"Every check passed."* keel reads each step's exit code directly and parses the test counts. A test step that selects zero tests fails. keel then writes a one-line receipt into the card. |
+| `lint` | Cards are well formed. Every criterion `D<n>` is bound to a check. A card that claims to be finished has its evidence, and its hand checks are confirmed by the author. |
+| `check-docs` | `AGENTS.md` and the playbook stay within their size budgets. There are no broken links or stale paths. Decision numbers increase. Invariants and fixtures point at code that exists. Terms the glossary forbids do not appear in the source. |
+| `check-boundaries` | The architecture boundaries declared in `keel.toml`, enforced as regex rules. |
+| `mutate` | Mutation testing restricted to the code this branch changed. |
+
+The full manual is [docs/KEEL.md](docs/KEEL.md).
+
+## The life of a card
+
+1. Run `keel new fix <slug>` and write the definition of done. Bind every criterion `D<n>` to a check.
+2. **Opening commit:** commit the card together with the new, failing test. This commit is both the RED evidence and the freeze point of the definition of done.
+3. Implement the change. The definition of done may only get stricter.
+4. Run `keel verify-red`, `keel assert-guard` and `keel gate --record`.
+5. Set the status to `done`. Changes the author can see stay at `awaiting-author` until the author has tried them by hand.
+
+**There is no CI.** All evidence is produced locally, by the git hooks and the commands above. The pre-commit hook runs only the fast checks: lint, freeze, docs, boundaries and the test-weakening guard. Run the full gate and `verify-red` by hand before you mark a card done.
+
+## Layout
 
 ```
-AGENTS.md            agent 指引的唯一入口（地图，≤150 行）；CLAUDE.md 只 import 它
-PLAN.md              目标、非目标、预算、里程碑（每层一条可检查的退出条件）、决策记录
-CONTEXT.md           词表；「避免」列的词出现在源码里即失败
-keel.toml            唯一的机器配置：gate 步骤、RED 的跑法、测试与断言模式、边界规则
+AGENTS.md            single entry point for agents (a map, ≤150 lines); CLAUDE.md only imports it
+PLAN.md              goals, non-goals, budgets, layered milestones, decision log
+CONTEXT.md           glossary; terms listed under "avoid" fail the build if they appear in source
+keel.toml            the only machine config: gate steps, how to run RED, test patterns, boundaries
 docs/
-  PRINCIPLES.md      为什么是这套流程（每条原则 → 来源 → 机制）
-  PLAYBOOK.md        专题规则，「一句话 + 判据」，总数有上限
-  KEEL.md            keel 命令与卡片格式手册
-  INVARIANTS.md      不变量登记（代码断言 > property > 模型检查 > 样例）
-  FIXTURES.md        可复用的验证夹具（「引理」），卡里按名字引用
-  PROGRESS.md        会话交接，最新在上
-  tasks/             任务卡与两种模板
-  examples/          一张填好的完整卡
-  adr/  research/    重大决策与调研笔记的模板
+  PRINCIPLES.md      why the process is shaped this way (principle → source → mechanism)
+  PLAYBOOK.md        topic rules as "one sentence + criterion", with a size budget
+  KEEL.md            keel commands and card format
+  INVARIANTS.md      invariant registry (code assertion > property > model check > example)
+  FIXTURES.md        reusable verification fixtures (the "lemmas")
+  PROGRESS.md        session handoff, newest first
+  tasks/             task cards and the two templates
+  examples/          one fully filled-in card
+  adr/  research/    templates for major decisions and research notes
 tools/
-  keel.py            可信内核：单文件、只用标准库
-  presets/           各技术栈的 keel.toml 预设
-  tests/             keel 自己的测试（每项检查都演示过抓得住违规）
-  self_mutation.py   把 keel 的每条判定逐一改坏，要求测试变红
-.githooks/           pre-commit（lint、冻结、文档、弱化测试检查）与 commit-msg（Conventional Commits）
-.github/             CI：跑 gate，并对 PR 改动到的卡跑 verify-red
-.claude/settings.json  push、amend、`git add -A` 等操作需要确认或被禁止
+  keel.py            the trusted kernel: one file, standard library only
+  presets/           keel.toml presets per stack
+  tests/             keel's own tests
+  self_mutation.py   breaks each keel check in turn and requires the tests to notice
+.githooks/           pre-commit and commit-msg (Conventional Commits)
+.claude/settings.json  push and amend ask first; force push and `git add -A` are denied
 ```
 
-## 一张卡的生命周期
+## Improving the template
 
-1. `keel new fix <slug>` 开卡，写完成定义：每条 `D<n>` 都要绑定一个检查。
-2. **开卡提交**：卡加上新写的红测试。这个 commit 就是 RED 证据，也是完成定义的冻结点。
-3. 实现。完成定义只能加严，要改就在 `## 修订` 里写明，并由作者确认。
-4. 跑 `keel verify-red`（在 RED commit 上必须红，修好后必须绿）、`keel assert-guard`（没有弱化测试）、`keel gate --record`（写入回执）。
-5. 状态改为 `done`；作者可见的改动先停在 `awaiting-author`，等作者手测确认。
+This repository checks itself with keel:
 
-## 改进这个模板
+```bash
+python3 tools/keel.py gate          # tests + every check
+python3 tools/self_mutation.py      # removing any check must turn some test red
+```
 
-这个仓库也用它自己检查自己：`python3 tools/keel.py gate`。改 keel 的检查时，`tools/tests/` 里要同时有「抓到违规」和「干净通过」两条测试。
+When you add or change a check, add both a "catches the violation" test and a "clean input passes" test to `tools/tests/test_keel.py`. Then add a matching mutant to `tools/self_mutation.py`.
