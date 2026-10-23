@@ -1,0 +1,23 @@
+# init turns an empty directory into a keel project.
+exec keel init --name demo --stack cargo
+stdout 'initialized `demo` with preset `cargo`'
+grep '^name = "demo"' keel.toml
+grep '^version = "0.0.0-dev"' keel.toml
+grep 'github:visual-z/keel' mise.toml
+grep '^# demo' README.md
+! grep 'PROJECT_NAME' AGENTS.md
+! grep 'PROJECT_NAME' PLAN.md
+! grep 'PROJECT_NAME' CONTEXT.md
+! grep 'PROJECT_NAME' README.md
+exists docs/tasks/TEMPLATE.md
+exists .githooks/pre-commit
+exec git config core.hooksPath
+stdout .githooks
+exec keel new fix first-bug --light
+stdout 'docs/tasks/fix-first-bug.md'
+exec keel lint
+exec keel check-docs
+! exec keel init --name again --stack cargo
+stderr 'already exists'
+
+! exec keel init --name x --stack cobol

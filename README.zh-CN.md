@@ -2,9 +2,11 @@
 
 [English](README.md) | **中文**
 
-和项目无关的工作区模板，供所有新项目起步使用。
+这个仓库包含两部分：
+- 一个和语言无关的工作区模板；
+- `keel`：一个检查任务卡上各项声明的单文件静态二进制。
 
-keel 把每张任务卡当作一个**待证明的命题**：完成定义是规约，测试是证明，`tools/keel.py` 是证明检查器。
+keel 把每张任务卡当作一个**待证明的命题**：完成定义是规约，测试是证明，`keel` 是证明检查器。
 卡上的每条声明，比如「这个测试修复前是红的」「完成定义没有放宽」「gate 全绿」，都由 keel 从 git 和真实的退出码重新推出来，不采信叙述。
 
 ## 为什么需要它
@@ -17,90 +19,81 @@ keel 把每张任务卡当作一个**待证明的命题**：完成定义是规�
 
 人在压力下也会这样。keel 的做法是**只信检查器**：任何声明都必须能被机器重新验证，否则不算数。
 
-设计依据见 [docs/PRINCIPLES.md](docs/PRINCIPLES.md)。每条原则都写明了来源（形式化验证的经验、长时 agent harness、harness engineering、对 reward hacking 的研究）和落地机制。
+项目自己的构建工具（cargo、go、bun、tsc、pytest）检查的是**代码**。keel 检查的是**关于历史的声明**，这些没有哪个语言工具链会检查：
+- 「这个测试在 commit X 上是红的」；
+- 「这条判据自开卡以来没改过」；
+- 「这次 diff 删掉了断言」；
+- 「这张回执覆盖了全部步骤」。
 
-## 开始一个新项目
+这一层和项目用什么语言无关，所以 keel 只实现一次：用 Go 写，发布成一个没有运行时依赖的二进制。每个项目钉住自己用的版本，就像 `rust-toolchain.toml` 钉住 rustc 一样。
 
-```bash
-gh repo create <name> --private --template visual-z/keel --clone
-cd <name>
-python3 tools/keel.py init --name <name> --stack <cargo|go|bun|vitest|jest|pytest>
-```
-
-`init` 做这几件事：
-- 用 `tools/presets/<stack>.toml` 生成 `keel.toml`；
-- 替换 `{{PROJECT_NAME}}`；
-- 把 README 换成项目自己的版本；
-- 启用 `.githooks`；
-- 在 `docs/PROGRESS.md` 里记一笔。
-
-然后填掉 `AGENTS.md`、`PLAN.md`、`CONTEXT.md` 里的 `⟨…⟩` 占位符，开第一张卡：
+## 安装
 
 ```bash
-python3 tools/keel.py new feat skeleton
+mise use github:visual-z/keel@1.0.0                 # 推荐：版本写进 mise.toml
+go install github.com/visual-z/keel/cmd/keel@v1.0.0 # 有 Go 工具链时
 ```
 
-只需要 Python 3.11+ 和 git。
+也可以从 [Releases](https://github.com/visual-z/keel/releases) 下载对应平台的压缩包，并用 `checksums.txt` 核对。
+
+每个仓库都在 `keel.toml` 里钉住所用的版本（`[keel] version = "1.0.0"`）。版本不一致时 keel 拒绝运行，所以结论不会取决于 PATH 上碰巧是哪个 keel。
+
+## 开始一个项目
+
+```bash
+mkdir demo && cd demo
+keel init --name demo --stack cargo       # 预设：cargo、go、bun、vitest、jest、pytest
+keel new feat skeleton
+```
+
+已有项目用 `keel adopt --stack <预设>`。它只补上缺的东西（`keel.toml`、卡模板、hooks），并把采用 keel 之前的卡冻结进存量清单。这个清单只能缩短，新卡必须合规。
 
 ## keel 检查什么
 
 | 命令 | 检查的声明 |
 |---|---|
-| `verify-red <卡>` | 「这个测试修复前是红的」：在 RED commit 的临时 worktree 里重跑，必须红；在当前工作树里必须绿。编译错误、加载错误、匹配 0 个测试、超时都不算红。 |
-| `verify-red`（故障补丁） | 「测试真能抓住这个 bug」：把卡里的 `keel-inject` 补丁打到 HEAD 上，测试必须变红；补丁只能改产品代码，不能改测试。 |
-| `freeze-check` | 「完成定义没有放宽」：和开卡提交（冻结点）对比，条目只能增加；修改需要作者在 `## 修订` 里确认。 |
-| `assert-guard` | 「没有弱化测试」：diff 里删掉的断言、新增的 skip/only、测试里的早退出与 `__eq__` 覆盖、被删的测试文件。 |
-| `gate --record <卡>` | 「全部检查通过」：直接读每一步的退出码，解析测试计数（选中 0 个测试也算失败），写一行回执到卡里。 |
-| `lint` | 卡的结构完整；每条 `D<n>` 都绑定了检查；声明完成时证据齐全；作者手测已确认。 |
-| `check-docs` | AGENTS.md 行数和规则手册条数在预算内；没有坏链接和过期路径；决策编号递增；不变量和夹具指向真实存在的代码；词表禁用的词没出现在源码里。 |
-| `check-boundaries` | `keel.toml` 里定义的、正则级别的架构边界。 |
-| `mutate` | 只对本分支改动的代码跑变异测试。 |
+| `verify-red <卡>` | 「这个测试修复前是红的」：在 RED commit 的临时 worktree 里重跑，必须红；在当前工作树里，必须绿。设了 `repeat = N` 时，每一次都必须一致。编译错误、加载错误、跳过或选中 0 个测试、超时、崩溃、退出码和报告对不上，都不算红。 |
+| `verify-red`（故障补丁） | 「测试真能抓住这个 bug」：把卡里的 `keel-inject` 补丁打到 HEAD 上，测试必须变红。补丁只能改产品代码，不能改测试。 |
+| `freeze-check` | 「完成定义没有放宽」：和开卡那次提交对比，判据只能增加；要修改，必须由作者确认。 |
+| `assert-guard` | 「没有弱化测试」：在 diff 里查删掉的断言、新增的 skip/only、测试里的早退出和 `__eq__` 覆盖，以及被删的测试文件。 |
+| `gate --record <卡>` | 「全部检查通过」：直接读每一步的退出码，只统计真正执行了的测试（执行 0 个就算失败），然后在卡里写一行回执。只跑了部分步骤的结果不能写进去。 |
+| `audit-red` | 每条声明（存量卡里的也算）指向的 commit 都还在，并且已钉在 `refs/keel/red/` 下。 |
+| `lint`、`check-docs`、`check-boundaries` | 卡的结构与证据；文档预算、链接、地图里的过期路径、决策编号、注册表、词表；正则级的架构边界。 |
 
-完整手册：[docs/KEEL.md](docs/KEEL.md)。
+keel 认的是**测试的输出格式，而不是具体工具**：能用结构化输出（`go test -json`、JUnit XML）就不解析文本，只有在没有稳定结构化格式的地方（cargo、bun）才解析文本。完整手册见 [template/docs/KEEL.md](template/docs/KEEL.md)。
 
-## 一张卡的生命周期
+## 参照了哪些项目，各借鉴了什么
 
-1. `keel new fix <slug>` 开卡，写完成定义，每条 `D<n>` 都绑定一个检查。
-2. **开卡提交**：提交卡和新写的红测试。这个 commit 既是 RED 证据，也是完成定义的冻结点。
-3. 实现。完成定义只能加严。
-4. 跑 `keel verify-red`、`keel assert-guard`、`keel gate --record`。
-5. 状态改为 `done`；作者可见的改动停在 `awaiting-author`，等作者手测确认。
+| 项目 | keel 借鉴的内容 |
+|---|---|
+| [lefthook](https://github.com/evilmartians/lefthook)、[prek](https://github.com/j178/prek) | 跨语言的开发工具做成一个不依赖运行时的静态二进制。prek 正是为了摆脱 pre-commit 的 Python 依赖而重写的，和 keel 放弃 Python 是同一个理由。 |
+| [mise](https://mise.jdx.dev/dev-tools/backends/github.html) / [aqua](https://aquaproj.github.io/docs/) | 每个仓库钉住工具版本，从 GitHub Release 安装；产物命名为 `<名>_<版本>_<os>_<arch>.tar.gz`。 |
+| [regression-witness](https://github.com/qjf1597300-cloud/regression-witness) | 用 JUnit XML 而不是文本来判定修复前后的结果；退出码必须和报告一致；多次运行必须一致；缺失、跳过、执行出错的测试都不算证据。 |
+| SWE-bench 的 FAIL_TO_PASS | 一个修复的证据，是指定的测试在修复前失败、修复后通过。 |
+| [testscript](https://github.com/rogpeppe/go-internal)（go-internal） | keel 自己的端到端测试写成脚本化的场景仓库，和 Go 团队测试 `go` 命令的方式一样。 |
+| xeno 的 `verify-red.ts` | keel 的原型：在临时 worktree 里重跑 RED 声明、把快照钉在 ref 下、严格校验 bun 的测试摘要。它的测试都移植成了 keel 的场景。 |
 
-**没有 CI**：所有证据都在本地产生，由 git hook 和上面这些命令保证。pre-commit 只跑快的检查（lint、冻结、文档、边界、弱化测试）；完整的 gate 和 verify-red 在把卡标为 done 之前手动跑。
+卡片格式背后的设计原则见 [template/docs/PRINCIPLES.md](template/docs/PRINCIPLES.md)，来源包括大规模形式化验证的经验、长时 agent harness 的实践，以及对 reward hacking 的研究。
 
 ## 目录
 
 ```
-AGENTS.md            agent 指引的唯一入口（地图，≤150 行）；CLAUDE.md 只 import 它
-PLAN.md              目标、非目标、预算、分层里程碑、决策记录
-CONTEXT.md           词表；「避免」列的词出现在源码里即失败
-keel.toml            唯一的机器配置：gate 步骤、RED 的跑法、测试模式、边界规则
-docs/
-  PRINCIPLES.md      为什么是这套流程（原则 → 来源 → 机制）
-  PLAYBOOK.md        专题规则，「一句话 + 判据」，总数有上限
-  KEEL.md            keel 命令与卡片格式手册
-  INVARIANTS.md      不变量登记（代码断言 > property > 模型检查 > 样例）
-  FIXTURES.md        可复用的验证夹具（「引理」）
-  PROGRESS.md        会话交接，最新在上
-  tasks/             任务卡与两种模板
-  examples/          一张填好的完整卡
-  adr/  research/    重大决策与调研笔记的模板
-tools/
-  keel.py            可信内核：单文件、只用标准库
+cmd/keel/            二进制入口
+internal/keel/       各项检查；testdata/script/*.txtar 是端到端场景
+internal/selfmut/    逐条改坏检查，要求测试能发现
+template/            `keel init` 写入的内容（嵌在二进制里）
   presets/           各技术栈的 keel.toml 预设
-  tests/             keel 自己的测试
-  self_mutation.py   把 keel 的每条判定逐一改坏，要求测试变红
-.githooks/           pre-commit 与 commit-msg（Conventional Commits）
-.claude/settings.json  push、amend 需确认；force push、`git add -A` 被禁止
+scripts/release.sh   交叉编译、生成校验和、发布 Release（没有 CI）
+keel.toml            keel 用自己检查自己的仓库
 ```
 
-## 改进这个模板
-
-这个仓库也用 keel 检查自己：
+## 开发 keel
 
 ```bash
-python3 tools/keel.py gate          # 测试 + 全部检查
-python3 tools/self_mutation.py      # 每条检查都必须有测试能抓到它被删除
+go test -race ./...           # 单元测试 + 场景仓库
+go run ./internal/selfmut     # 每一项检查，被删掉时都必须有测试发现
+keel gate                     # 本仓库自己的 gate
+scripts/release.sh 1.0.0 --publish
 ```
 
-新增或修改检查时，在 `tools/tests/test_keel.py` 里同时加一条「抓到违规」和一条「干净输入通过」的测试，并在 `tools/self_mutation.py` 里加一个对应的变异体。
+新增或修改检查时，要同时加一个「抓到违规」的场景和一个「干净输入能通过」的场景，再在 `internal/selfmut` 里加一个对应的变异体。

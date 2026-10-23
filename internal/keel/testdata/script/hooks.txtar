@@ -1,0 +1,24 @@
+# The git hooks run keel: a commit that breaks a fast check is refused, and
+# commit messages must be Conventional Commits.
+repo
+exec keel adopt
+exec git config core.hooksPath
+stdout .githooks
+cp agents.txt AGENTS.md
+exec git add -A
+exec git commit -q -m 'chore: adopt keel'
+! exec git commit -q --allow-empty -m 'updated stuff'
+stderr 'Conventional Commits'
+
+# A sloppy new card blocks the commit.
+cp sloppy.txt docs/tasks/fix-new.md
+exec git add -A
+! exec git commit -q -m 'fix: add a sloppy card'
+stderr 'pre-commit: lint failed'
+exec git log --format=%s -1
+stdout 'chore: adopt keel'
+
+-- agents.txt --
+map
+-- sloppy.txt --
+# sloppy

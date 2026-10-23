@@ -1,0 +1,74 @@
+# keel preset: cargo. `keel init` writes this as keel.toml; adjust it to the project.
+[keel]
+version = "{{KEEL_VERSION}}"   # the keel release this repository is checked with
+
+[project]
+name = "{{PROJECT_NAME}}"
+stack = "cargo"
+
+[[gate.step]]
+name = "build"
+cmd = ["cargo", "build", "--locked"]
+
+[[gate.step]]
+name = "test"
+cmd = ["cargo", "test", "--locked", "--no-fail-fast"]
+runner = "cargo"
+
+[[gate.step]]
+name = "clippy"
+cmd = ["cargo", "clippy", "--workspace", "--all-targets", "--locked", "--", "-D", "warnings"]
+
+[[gate.step]]
+name = "fmt"
+cmd = ["cargo", "fmt", "--check"]
+
+[[gate.step]]
+name = "boundaries"
+cmd = ["keel", "check-boundaries"]
+
+[[gate.step]]
+name = "docs"
+cmd = ["keel", "check-docs"]
+
+[[gate.step]]
+name = "cards"
+cmd = ["keel", "lint"]
+
+[[gate.step]]
+name = "freeze"
+cmd = ["keel", "freeze-check"]
+
+[guard]
+base = "main"
+
+[docs]
+agents_max_lines = 150     # AGENTS.md 是地图不是百科；超了就把细节下沉或机械化
+playbook_max_rules = 120   # 规则只增不减会撞墙；超了就合并或改写成检查
+glossary_source_dirs = []  # 填源码目录后，CONTEXT.md「避免」列的词在源码中出现即失败
+
+# 边界规则：正则级的「Never」。每条新规则都要先故意违规一次确认它会红。
+# [[boundary.rule]]
+# name = "core 不做 I/O"
+# paths = ["src/core/**"]
+# forbid = ["⟨禁用的 import 正则⟩"]
+
+[red]
+runner = "cargo"   # cargo has no stable structured output; keel parses `test result:` lines
+# {args} splits the claim with shell rules: RED: <commit> -p <crate> <test name>
+command = ["cargo", "test", "--locked", "--no-fail-fast", "{args}"]
+link = []
+# a private target dir for throwaway worktrees: no cold builds, never shared with the working tree
+env = { CARGO_TARGET_DIR = "{cache}/cargo-target" }
+timeout_s = 3600
+
+[tests]
+paths = ["tests/**", "**/tests/**", "benches/**"]
+inline_paths = ["src/**", "**/src/**"]   # Rust unit tests and debug_assert live in src
+assert_patterns = ['\b(debug_)?assert(_eq|_ne|_matches)?!', '\bprop_assert(_eq|_ne)?!']
+skip_patterns = ['#\[ignore']
+suspicious_patterns = ['std::process::exit', '\bprocess::exit\(']
+
+[mutate]
+# mutate only the code this branch changed; needs `cargo install cargo-mutants`
+command = ["cargo", "mutants", "--in-diff", "{diff}"]

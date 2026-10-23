@@ -1,0 +1,25 @@
+# A polyglot repository runs claims through more than one runner.
+repo
+mkdir web
+cp tests/run.sh web/run.sh
+mkdir web/tests
+cp tests/cases.sh web/tests/cases.sh
+exec sh -c 'printf "\n[red.profile.web]\ncwd = \"web\"\ncommand = [\"sh\", \"run.sh\", \"{filter}\"]\n" >> keel.toml'
+exec sh -c 'printf "#\n4\n#\n" > web/calc.txt && printf "#\n9\n#\n" > calc.txt'
+commit 'web red' RED
+exec sh -c 'printf "#\n9\n#\n" > web/calc.txt'
+commit 'web fix'
+exec sh -c 'printf "check adds_two 9\n" > web/tests/cases.sh && printf "#\n9\n#\n" > web/calc.txt'
+commit 'web cases'
+
+expand card-web.tmpl docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md --no-green
+stderr 'the test PASSED'
+expand card-ios.tmpl docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'unknown RED profile `ios`; declared: web'
+
+-- card-web.tmpl --
+RED(web): $RED adds_two
+-- card-ios.tmpl --
+RED(ios): $RED adds_two

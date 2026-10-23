@@ -1,0 +1,7 @@
+#!/bin/sh
+# Conventional Commits: type(scope)!: subject — the subject says why, in the imperative.
+command -v keel >/dev/null 2>&1 || {
+  echo "keel is not installed: run \`mise install\` (mise.toml pins it) or see docs/KEEL.md" >&2
+  exit 1
+}
+exec keel hook commit-msg "$1"

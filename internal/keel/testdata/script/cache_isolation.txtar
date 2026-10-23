@@ -1,0 +1,16 @@
+# red.env (a private build cache) reaches throwaway worktrees but never the
+# working tree's green run: a cache shared with a fault-injected checkout
+# would hand green the faulty build.
+repo
+exec sh -c 'printf "\n[red.env]\nFAULTY_CACHE = \"{cache}\"\n" >> keel.toml'
+commit 'cache env'
+setvalue 3
+commit 'red' RED
+setvalue 4
+commit 'fix'
+expand card.tmpl docs/tasks/fix-a.md
+exec keel verify-red docs/tasks/fix-a.md
+stdout 'GREEN   working tree  adds_two'
+
+-- card.tmpl --
+RED: $RED adds_two

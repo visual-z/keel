@@ -1,0 +1,8 @@
+repo
+mkdir src/core
+exec sh -c 'echo "def f(): return 1" > src/core/pure.py'
+exec keel check-boundaries
+stdout '0 violation'
+exec sh -c 'echo "import os" > src/core/pure.py'
+! exec keel check-boundaries
+stderr 'src/core/pure.py:1: \[core is pure\]'

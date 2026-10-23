@@ -1,0 +1,64 @@
+# keel preset: vitest. `keel init` writes this as keel.toml; adjust it to the project.
+[keel]
+version = "{{KEEL_VERSION}}"   # the keel release this repository is checked with
+
+[project]
+name = "{{PROJECT_NAME}}"
+stack = "vitest"
+
+[[gate.step]]
+name = "typecheck"
+cmd = ["node_modules/.bin/tsc", "--noEmit"]
+
+[[gate.step]]
+name = "test"
+cmd = ["node_modules/.bin/vitest", "run", "--reporter=default", "--reporter=junit", "--outputFile.junit={junit}"]
+runner = "junit"
+
+[[gate.step]]
+name = "boundaries"
+cmd = ["keel", "check-boundaries"]
+
+[[gate.step]]
+name = "docs"
+cmd = ["keel", "check-docs"]
+
+[[gate.step]]
+name = "cards"
+cmd = ["keel", "lint"]
+
+[[gate.step]]
+name = "freeze"
+cmd = ["keel", "freeze-check"]
+
+[guard]
+base = "main"
+
+[docs]
+agents_max_lines = 150     # AGENTS.md 是地图不是百科；超了就把细节下沉或机械化
+playbook_max_rules = 120   # 规则只增不减会撞墙；超了就合并或改写成检查
+glossary_source_dirs = []  # 填源码目录后，CONTEXT.md「避免」列的词在源码中出现即失败
+
+# 边界规则：正则级的「Never」。每条新规则都要先故意违规一次确认它会红。
+# [[boundary.rule]]
+# name = "core 不做 I/O"
+# paths = ["src/core/**"]
+# forbid = ["⟨禁用的 import 正则⟩"]
+# 直接调用 node_modules/.bin 下锁定版本的工具：npx / bunx / pnpm exec 在缺依赖时会静默临时安装
+# 另一个版本，那样得到的红绿不是本项目测试工具的结论。缺依赖就让它失败（先装依赖）。
+[red]
+runner = "junit"
+command = ["node_modules/.bin/vitest", "run", "-t", "{filter}", "--reporter=junit", "--outputFile.junit={junit}"]
+link = ["node_modules"]
+env = {}
+timeout_s = 1800
+
+[tests]
+paths = ["**/*.test.*", "**/*.spec.*", "test/**", "tests/**", "__tests__/**"]
+assert_patterns = ['\bexpect\(', '\bassert(\.\w+)?\(']
+skip_patterns = ['\b(it|test|describe)\.(skip|todo|only)\(', '\bx(it|describe)\(', '\bf(it|describe)\(']
+suspicious_patterns = ['\bprocess\.exit\(']
+
+[mutate]
+# StrykerJS has no `since`: build --mutate from the diff and use --incremental
+command = []

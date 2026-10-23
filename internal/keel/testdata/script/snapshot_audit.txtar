@@ -1,0 +1,35 @@
+# snapshot commits HEAD + paths without moving the branch or the index;
+# audit-red checks every claim (legacy cards included), deduplicates
+# commits, and retains all or nothing.
+repo
+exec sh -c 'echo "check adds_two 5" >> tests/cases.sh'
+exec keel snapshot tests/cases.sh
+cp stdout snap.txt
+exec git rev-parse HEAD
+stdout $BASE
+exec git diff --cached --name-only
+! stdout .
+exec git status --porcelain tests/cases.sh
+stdout 'M tests/cases.sh'
+
+exec sh -c 'printf "RED: %s claim one\nRED: %s claim two\n" $(cat snap.txt) $(cat snap.txt) > docs/tasks/a.md'
+exec sh -c 'printf "RED: %s base\n" $BASE > docs/tasks/b.md'
+! exec keel audit-red --json
+stdout '"claims":3,"templateDeclarations":0,"commits":2,"retained":1,"unretained":1'
+! exec keel audit-red
+exec keel audit-red --retain --json
+stdout '"retained":2,"unretained":0'
+exec keel audit-red
+
+# A malformed claim blocks retention of every other claim.
+exec git update-ref -d refs/keel/red/$BASE
+exec sh -c 'printf "RED: HEAD mutable\n" > docs/tasks/c.md'
+! exec keel audit-red --retain --json
+stdout '"invalidCards":1'
+! exec git rev-parse --verify --quiet refs/keel/red/$BASE
+
+# Templates are templates.
+exec sh -c 'printf "RED: <commit> <filter>\n" > docs/tasks/TEMPLATE.md'
+exec sh -c 'rm docs/tasks/c.md'
+exec keel audit-red --retain --json
+stdout '"templateDeclarations":1,"commits":2,"retained":2'

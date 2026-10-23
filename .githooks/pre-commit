@@ -1,9 +1,0 @@
-#!/bin/sh
-# Fast checks only. There is no CI: the full gate and verify-red run locally before a card is marked done.
-set -e
-keel() { python3 tools/keel.py "$@"; }
-keel lint
-keel freeze-check
-keel check-docs
-keel check-boundaries
-keel assert-guard

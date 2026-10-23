@@ -1,0 +1,142 @@
+# Card structure and finished-card evidence.
+repo
+cp good.md docs/tasks/fix-add.md
+exec keel lint
+stdout 'lint: 1 card\(s\), 0 with problems'
+
+cp full-missing.md docs/tasks/fix-add.md
+! exec keel lint
+stdout 'missing section `## 观测面`'
+stdout 'missing section `## 环境假设`'
+
+cp unchecked.md docs/tasks/fix-add.md
+! exec keel lint
+stdout 'D1 has no `- 检：<kind> …` line'
+
+cp placeholder.md docs/tasks/fix-add.md
+! exec keel lint
+stdout 'placeholders'
+
+cp done-bare.md docs/tasks/fix-add.md
+! exec keel lint
+stdout 'needs a `RED: <commit> <filter>` line'
+stdout 'needs a `GATE: <rev> ok'
+
+cp done-partial.md docs/tasks/fix-add.md
+! exec keel lint
+stdout 'does not show every gate step exiting 0'
+
+cp red-none.md docs/tasks/fix-add.md
+! exec keel lint
+stdout '`RED: none` is not allowed on a `fix` card'
+
+cp author.md docs/tasks/fix-add.md
+! exec keel lint
+stdout 'author check is not confirmed'
+
+cp good.md docs/tasks/feat-add.md
+! exec keel lint docs/tasks/feat-add.md
+stdout 'file name must be `fix-<kebab-slug>.md`'
+
+-- good.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+x
+## 完成定义
+- **D1** adds.
+  - 检：test `adds_two`
+## 证据
+-- full-missing.md --
+---
+type: fix
+status: doing
+weight: full
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** adds.
+  - 检：test `adds_two`
+## 证据
+-- unchecked.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** adds.
+## 证据
+-- placeholder.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+⟨现象⟩
+## 完成定义
+- **D1** adds.
+  - 检：test `adds_two`
+## 证据
+-- done-bare.md --
+---
+type: fix
+status: done
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** adds.
+  - 检：test `adds_two`
+## 证据
+-- done-partial.md --
+---
+type: fix
+status: done
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** adds.
+  - 检：test `adds_two`
+## 证据
+RED: abcdef1 adds_two
+GATE: abc+dirty ok docs=0 (2026-01-01)
+-- red-none.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** adds.
+  - 检：test `adds_two`
+## 证据
+RED: none — obvious
+-- author.md --
+---
+type: fix
+status: done
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** looks right.
+  - 检：author 看一眼
+## 证据
+RED: abcdef1 adds_two
+GATE: abc ok unit=0[2p/0f] (2026-01-01)

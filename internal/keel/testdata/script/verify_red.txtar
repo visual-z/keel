@@ -1,0 +1,45 @@
+# A RED claim verifies: red at its commit, green in the working tree, and
+# the commit is retained under refs/keel/red/ after the worktree is gone.
+repo
+setvalue 3
+commit 'test: pin add while it is wrong' RED
+setvalue 4
+commit 'fix: add adds'
+expand card.tmpl docs/tasks/fix-add.md
+exec keel verify-red docs/tasks/fix-add.md
+stdout '1 RED claim\(s\), 0 injected fault\(s\) verified'
+stdout 'GREEN   working tree  adds_two'
+gitsha R refs/keel/red/$RED
+exec git worktree list --porcelain
+! stdout keel-red-
+exec git status --porcelain
+stdout '^\?\? docs/tasks/fix-add.md$'
+
+# The ref survives an expired reflog and gc.
+exec git reflog expire --expire=now --all
+exec git gc -q --prune=now
+exec git cat-file -t $RED
+stdout commit
+
+-- card.tmpl --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+
+# fix add
+
+## 问题
+
+x
+
+## 完成定义
+
+- **D1** adds.
+  - 检：test `adds_two`
+
+## 证据
+
+RED: $RED adds_two  # D1

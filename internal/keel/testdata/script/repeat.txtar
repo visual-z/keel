@@ -1,0 +1,13 @@
+# Repeated runs must all agree; a test that is red only sometimes cannot
+# certify anything.
+repo
+exec sh -c 'printf "%s\n" "n=\$(cat \$HOME/n 2>/dev/null || echo 0); n=\$((n+1)); echo \$n > \$HOME/n" "[ \$((n % 2)) -eq 0 ] && value=4" > tests/flaky.sh'
+exec sh -c 'printf ". ./tests/flaky.sh\n" | cat - tests/cases.sh > t && mv t tests/cases.sh'
+setvalue 3
+commit 'flaky red' RED
+expand card.tmpl docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md --repeat 2 --no-green
+stderr 'run 2'
+
+-- card.tmpl --
+RED: $RED adds_two

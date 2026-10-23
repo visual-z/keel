@@ -1,0 +1,22 @@
+# keel never moves an existing ref, symbolic or not, to make a check green.
+repo
+setvalue 3
+commit 'red' RED
+setvalue 4
+commit 'fix'
+expand card.tmpl docs/tasks/fix-a.md
+exec git update-ref refs/keel/red/$RED $BASE
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'refusing to move it'
+exec git rev-parse refs/keel/red/$RED
+stdout $BASE
+
+exec git update-ref -d refs/keel/red/$RED
+exec git symbolic-ref refs/keel/red/$RED refs/heads/missing-target
+! exec keel audit-red --retain --json
+stdout '"conflicts":\["'
+exec git symbolic-ref refs/keel/red/$RED
+stdout 'refs/heads/missing-target'
+
+-- card.tmpl --
+RED: $RED adds_two

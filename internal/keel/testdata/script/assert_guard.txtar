@@ -1,0 +1,44 @@
+# The diff must not weaken tests.
+repo
+exec git checkout -q -b work
+exec sh -c 'echo "check adds_three 4" >> tests/cases.sh'
+exec keel assert-guard
+stdout '0 problem'
+
+exec git checkout -q -- tests/cases.sh
+exec sh -c 'grep -v adds_two tests/cases.sh > t && mv t tests/cases.sh'
+! exec keel assert-guard
+stderr 'assertions dropped \(1 removed, 0 added\)'
+
+exec git checkout -q -- tests/cases.sh
+exec sh -c 'echo "skip adds_two" >> tests/cases.sh'
+! exec keel assert-guard
+stderr 'skip/only marker'
+
+exec git checkout -q -- tests/cases.sh
+exec sh -c 'echo "exit 0" >> tests/cases.sh'
+! exec keel assert-guard
+stderr 'early-exit or always-equal'
+
+exec git checkout -q -- tests/cases.sh
+rm tests/cases.sh
+! exec keel assert-guard
+stderr 'tests/cases.sh: test file deleted'
+
+# An author-confirmed weakening is allowed.
+cp ok.md docs/tasks/fix-a.md
+exec keel assert-guard
+
+# A removed line whose content starts with `-- a/` is not a file header:
+# misreading it would charge the next removed assertion to another file.
+rm docs/tasks/fix-a.md
+exec git checkout -q -- tests/cases.sh
+exec sh -c 'printf "%s\n" "-- a/notes" | cat - tests/cases.sh > t && mv t tests/cases.sh'
+commit 'notes'
+exec git checkout -q -b work2
+exec sh -c 'grep -v -e "a/notes" -e adds_two tests/cases.sh > t && mv t tests/cases.sh'
+! exec keel assert-guard --base work
+stderr 'tests/cases.sh: assertions dropped \(1 removed, 0 added\)'
+
+-- ok.md --
+WEAKEN-OK: tests/cases.sh merged into property tests（作者确认 2026-01-02）

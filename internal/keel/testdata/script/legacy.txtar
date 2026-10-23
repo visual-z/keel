@@ -1,0 +1,56 @@
+# Adopting keel: old cards keep their format, new cards must comply, the
+# legacy list only shrinks, and old RED lines are still claims.
+repo
+cp old1.md docs/tasks/F-old-thing.md
+cp old2.md docs/tasks/fix-old-bug.md
+cp good.md docs/tasks/fix-add.md
+exec keel adopt
+stdout '2 legacy card\(s\) of 3'
+grep '^F-old-thing.md$' docs/tasks/legacy.txt
+! grep fix-add docs/tasks/legacy.txt
+exists docs/tasks/TEMPLATE.md
+exists .githooks/pre-commit
+exec git config core.hooksPath
+stdout .githooks
+exec keel lint
+stdout '2 legacy skipped'
+! exec keel adopt
+stderr 'already exists'
+commit 'chore: adopt keel'
+
+# A new sloppy card is not exempt.
+cp old2.md docs/tasks/fix-new-bug.md
+! exec keel lint
+stdout 'fix-new-bug.md'
+
+# Growing the list after adoption fails the freeze check.
+exec sh -c 'echo fix-new-bug.md >> docs/tasks/legacy.txt'
+! exec keel freeze-check
+stderr 'may only shrink'
+
+# A listed card that no longer exists fails lint.
+exec sh -c 'grep -v fix-new-bug docs/tasks/legacy.txt > t && mv t docs/tasks/legacy.txt && rm docs/tasks/fix-new-bug.md docs/tasks/fix-old-bug.md'
+! exec keel lint
+stdout 'lists missing card'
+
+# Old RED lines are still claims: a malformed one is reported.
+! exec keel audit-red --json
+stdout '"invalidCards":1'
+
+-- old1.md --
+# old
+RED: replacing a line by hand turned it red
+-- old2.md --
+# old
+-- good.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据

@@ -1,0 +1,8 @@
+#!/bin/sh
+# Fast keel checks (lint, freeze-check, check-docs, check-boundaries, assert-guard).
+# The full gate and verify-red run before a card is marked done.
+command -v keel >/dev/null 2>&1 || {
+  echo "keel is not installed: run \`mise install\` (mise.toml pins it) or see docs/KEEL.md" >&2
+  exit 1
+}
+exec keel hook pre-commit

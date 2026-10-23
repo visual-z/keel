@@ -1,0 +1,35 @@
+# The gate reads exit codes directly, counts tests, and writes a receipt.
+repo
+cp card.md docs/tasks/fix-a.md
+exec keel gate --record docs/tasks/fix-a.md
+stdout 'unit=0\[2p/0f\]'
+grep '^GATE: [0-9a-f]{12}\+dirty ok unit=0\[2p/0f\]' docs/tasks/fix-a.md
+exists .keel/logs
+
+# A restricted run cannot be recorded.
+! exec keel gate --only unit --record docs/tasks/fix-a.md
+stderr 'not a completion receipt'
+
+# A red gate says so.
+setvalue 3
+! exec keel gate
+stdout ' fail unit=101'
+
+# A test step that runs nothing is not green.
+exec sh -c 'printf "" > tests/cases.sh'
+setvalue 4
+! exec keel gate
+stdout '0 tests: a test step that runs nothing is not green'
+
+-- card.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据

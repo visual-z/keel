@@ -1,5 +1,3 @@
-# keel: logs and private caches never enter the repository
+/dist/
 .keel/
-__pycache__/
-*.pyc
 .DS_Store

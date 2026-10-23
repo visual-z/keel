@@ -1,0 +1,43 @@
+# An injected fault in product code must turn the test red; one the tests
+# cannot see is reported; a fault may not edit tests; zero-context patches
+# apply; the working tree is untouched.
+repo
+cp card-seen.md docs/tasks/fix-a.md
+exec keel verify-red docs/tasks/fix-a.md
+stdout '1 injected fault\(s\) verified'
+exec git status --porcelain calc.txt
+! stdout .
+
+# echoes_value always agrees with calc.txt: no fault in it is visible.
+cp card-unseen.md docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'the test PASSED'
+
+cp card-edits-test.md docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'must break product code, not tests: tests/cases.sh'
+
+-- card-seen.md --
+```diff keel-inject adds_two
+--- a/calc.txt
++++ b/calc.txt
+@@ -2,1 +2,1 @@
+-4
++5
+```
+-- card-unseen.md --
+```diff keel-inject echoes_value
+--- a/calc.txt
++++ b/calc.txt
+@@ -2,1 +2,1 @@
+-4
++5
+```
+-- card-edits-test.md --
+```diff keel-inject adds_two
+--- a/tests/cases.sh
++++ b/tests/cases.sh
+@@ -1,1 +1,1 @@
+-check adds_two 4
++check adds_two 5
+```

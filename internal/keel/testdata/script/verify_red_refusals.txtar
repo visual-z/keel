@@ -1,0 +1,124 @@
+# Every way a run can look red without being one is refused, and a refused
+# claim leaves no retention ref behind.
+repo
+
+# The test passes at the claimed commit.
+expand card-base.tmpl docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'the test PASSED'
+
+# The filter selects nothing.
+setvalue 3
+commit 'red' RED
+expand card-typo.tmpl docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'selected 0 tests'
+
+# A compile error is not a behavioural red.
+setvalue broken
+commit 'broken' BROKEN
+expand card-broken.tmpl docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'compile error'
+
+# A crash is not a red.
+setvalue crash
+commit 'crash' CRASH
+expand card-crash.tmpl docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'killed by a signal'
+
+# A failed test reported with the wrong exit code: the run was abnormal.
+setvalue exit2
+commit 'exit2' EXIT2
+expand card-exit2.tmpl docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'exit 2 is not how `cargo` reports failed tests'
+
+# A hang is killed at the timeout (with its whole process group) and is not a red.
+exec sh -c 'sed -i.bak "s/timeout_s = 60/timeout_s = 1/" keel.toml && rm keel.toml.bak'
+setvalue hang
+commit 'hang' HANG
+expand card-hang.tmpl docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'timed out; a timeout is not a red'
+exec sh -c 'sed -i.bak "s/timeout_s = 1/timeout_s = 60/" keel.toml && rm keel.toml.bak'
+commit 'timeout back'
+
+# A fix that is still red fails the green run.
+expand card-red.tmpl docs/tasks/fix-a.md
+setvalue 3
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'expected green after the fix'
+
+# A branch name is not a commit id: the claim is malformed, not ignored.
+cp card-branch.md docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'invalid RED declaration'
+
+# None of the refused claims retained anything.
+exec git for-each-ref refs/keel/red/
+! stdout .
+
+-- card-base.tmpl --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据
+RED: $BASE adds_two
+-- card-typo.tmpl --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+RED: $RED no_such_test
+-- card-broken.tmpl --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+RED: $BROKEN adds_two
+-- card-crash.tmpl --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+RED: $CRASH adds_two
+-- card-exit2.tmpl --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+RED: $EXIT2 adds_two
+-- card-red.tmpl --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+RED: $RED adds_two
+-- card-branch.md --
+RED: main adds_two
+-- card-hang.tmpl --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+RED: $HANG adds_two

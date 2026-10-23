@@ -1,0 +1,104 @@
+# Docs stay in step with the code.
+repo
+cp agents-ok.txt AGENTS.md
+mkdir pkg/release
+cp agents-ok.txt pkg/release/release.go
+commit 'docs'
+exec keel check-docs
+stdout '0 problem'
+
+cp big.txt AGENTS.md
+! exec keel check-docs
+stderr 'is a map'
+
+cp agents-ok.txt AGENTS.md
+cp bad-links.txt docs/a.md
+! exec keel check-docs
+stderr 'broken link `gone.md`'
+stderr 'absolute link `/home/someone/x.log`'
+rm docs/a.md
+
+cp stale.txt AGENTS.md
+! exec keel check-docs
+stderr '`pkg/gone` does not exist'
+
+# Ignored build outputs named by the map are not stale.
+mkdir web
+exec sh -c 'echo x > web/index.ts && echo "web/dist/" >> .gitignore && printf "built into \`web/dist\`\n" > AGENTS.md'
+exec keel check-docs
+
+cp fixture-plan.txt PLAN.md
+! exec keel check-docs
+stderr 'out of order at 3→2'
+! stderr '9→1'
+rm PLAN.md
+
+cp fixture-progress.txt docs/PROGRESS.md
+! exec keel check-docs
+stderr 'newest first; 2026-01-05 after 2026-01-03'
+rm docs/PROGRESS.md
+
+cp inv.md docs/INVARIANTS.md
+! exec keel check-docs
+stderr '`INV-1` points at `test_never_written`'
+rm docs/INVARIANTS.md
+
+cp fixture-context.txt CONTEXT.md
+mkdir src
+exec sh -c 'echo "type Server struct{}" > src/app.go'
+! exec keel check-docs
+stderr 'src/app.go:1: uses `Server`'
+
+-- agents-ok.txt --
+call `f[T](ctx)`; see `pkg/release.Parse` and `pkg/...`
+-- big.txt --
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16
+17
+18
+19
+20
+21
+22
+-- bad-links.txt --
+[a](gone.md) and [log](/home/someone/x.log) and [ok](../AGENTS.md)
+-- stale.txt --
+see `pkg/gone`
+-- fixture-plan.txt --
+## 预算
+| # | x |
+|---|---|
+| 9 | a |
+| 1 | b |
+
+## 决策记录
+| # | d |
+|---|---|
+| 1 | a |
+| 3 | b |
+| 2 | c |
+-- fixture-progress.txt --
+## 2026-01-03
+## 2026-01-05
+-- inv.md --
+| ID | 不变量 | 检查方式 | 位置 |
+|---|---|---|---|
+| INV-1 | x | property | `test_never_written` |
+-- fixture-context.txt --
+| 术语 | 定义 | 避免 |
+|---|---|---|
+| Node | 机器 | `Server`、`Host` |

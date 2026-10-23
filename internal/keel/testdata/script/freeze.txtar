@@ -1,0 +1,95 @@
+# Done-definitions may only get stricter after the freeze commit.
+repo
+cp open.md docs/tasks/fix-add.md
+commit 'docs(tasks): open fix-add'
+exec keel freeze-check
+stdout '0 problem'
+
+# Loosened without the author: refused.
+cp loose.md docs/tasks/fix-add.md
+! exec keel freeze-check
+stderr 'D1 changed after the freeze'
+
+# Removed: refused.
+cp removed.md docs/tasks/fix-add.md
+! exec keel freeze-check
+stderr 'D1 was removed after the freeze'
+
+# Author-confirmed revision: accepted.
+cp revised.md docs/tasks/fix-add.md
+exec keel freeze-check
+
+# Adding a criterion and confirming an author check are not changes.
+cp added.md docs/tasks/fix-add.md
+exec keel freeze-check
+
+# A started card that was never committed has no freeze point.
+cp open.md docs/tasks/fix-new.md
+exec sh -c 'sed -i.bak "s/status: todo/status: doing/" docs/tasks/fix-new.md && rm docs/tasks/fix-new.md.bak'
+! exec keel freeze-check
+stderr 'fix-new.md: status `doing` but the card was never committed'
+
+-- open.md --
+---
+type: fix
+status: todo
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** add returns the sum.
+  - 检：author 看一眼
+## 证据
+-- loose.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** add returns roughly the sum.
+  - 检：author 看一眼
+## 证据
+-- removed.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D2** something else.
+  - 检：author 看一眼
+## 证据
+-- revised.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** add returns the sum of ints.
+  - 检：author 看一眼
+## 证据
+## 修订
+- D1 限定为整数（作者确认 2026-01-02）
+-- added.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** add returns the sum.
+  - 检：author 看一眼 已确认：2026-01-03
+- **D2** zero.
+  - 检：test `adds_zero`
+## 证据

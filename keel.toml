@@ -1,61 +1,66 @@
-# keel.toml — the only machine configuration in the workspace.
-# keel reads every command from here and never guesses the stack.
-#
-# This file describes the template itself: keel checks its own repository
-# (it eats its own dog food). In a new project, `python3 tools/keel.py init
-# --name <name> --stack <preset>` replaces it with tools/presets/<preset>.toml.
+# keel checks its own repository with keel (dogfooding). This file is for the
+# keel repository only; new projects get template/presets/<stack>.toml.
+[keel]
+version = "1.0.0"
 
 [project]
 name = "keel"
-stack = "unittest"
+stack = "go"
 
 [[gate.step]]
-name = "unit"
-cmd = ["python3", "-m", "unittest", "discover", "-s", "tools/tests"]
-runner = "unittest"
+name = "build"
+cmd = ["go", "build", "./..."]
 
 [[gate.step]]
-name = "boundaries"
-cmd = ["python3", "tools/keel.py", "check-boundaries"]
+name = "vet"
+cmd = ["go", "vet", "./..."]
+
+[[gate.step]]
+name = "test"
+cmd = ["go", "test", "-race", "-count=1", "-json", "./..."]
+runner = "go-json"
+
+[[gate.step]]
+name = "fmt"
+cmd = ["sh", "-c", "test -z \"$(gofmt -l cmd internal *.go)\""]
 
 [[gate.step]]
 name = "docs"
-cmd = ["python3", "tools/keel.py", "check-docs"]
+cmd = ["keel", "check-docs"]
 
 [[gate.step]]
-name = "cards"
-cmd = ["python3", "tools/keel.py", "lint"]
-
-[[gate.step]]
-name = "freeze"
-cmd = ["python3", "tools/keel.py", "freeze-check"]
+name = "boundaries"
+cmd = ["keel", "check-boundaries"]
 
 [red]
-runner = "unittest"
-command = ["python3", "-m", "unittest", "discover", "-s", "tools/tests", "-k", "{filter}"]
-link = []
-env = {}
+runner = "go-json"
+command = ["go", "test", "-count=1", "-json", "{args}"]
 timeout_s = 600
 
 [tests]
-paths = ["tools/tests/**"]
-assert_patterns = ['\bself\.assert\w*\(', '\bassert\b']
-skip_patterns = ['\bunittest\.skip', '\.skipTest\(']
-suspicious_patterns = ['\bsys\.exit\(', 'def __eq__']
+paths = ["internal/keel/*_test.go", "internal/keel/testdata/**"]
+assert_patterns = ['\bt\.(Error|Errorf|Fatal|Fatalf|Fail|FailNow)\(', '^\s*!?\s*(exec|stdout|stderr|grep|exists|cmp)\b']
+skip_patterns = ['\bt\.Skip(f|Now)?\(', '^\s*skip\b']
+suspicious_patterns = ['\bos\.Exit\(0\)']
 
-[guard]
-base = "main"
+[paths]
+tasks = "template/docs/tasks"
 
 [docs]
-agents_max_lines = 150
-playbook_max_rules = 120
-glossary_source_dirs = ["tools"]
+# The repository root is keel's own README, not a project map.
+agents = "README.md"
+agents_max_lines = 200
+map_files = ["README.md"]
+playbook = "template/docs/PLAYBOOK.md"
+progress = "template/docs/PROGRESS.md"
+plan = "template/PLAN.md"
+invariants = "template/docs/INVARIANTS.md"
+fixtures = "template/docs/FIXTURES.md"
+glossary = "template/CONTEXT.md"
 
-# The trusted kernel stays standard-library only, so it runs in any project.
+# The kernel stays dependency-light: TOML and the test-only testscript.
 [[boundary.rule]]
-name = "kernel stays stdlib-only"
-paths = ["tools/keel.py"]
-forbid = ['^\s*(import|from)\s+(requests|yaml|toml|click|rich|pydantic)\b']
-
-[mutate]
-command = []
+name = "kernel imports"
+paths = ["internal/keel/*.go"]
+except = ["internal/keel/*_test.go"]
+forbid = ['"github\.com/(?:spf13|urfave|fatih|charmbracelet)/']
