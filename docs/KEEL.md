@@ -8,6 +8,7 @@
 | 命令 | 做什么 | 失败意味着 |
 |---|---|---|
 | `init --name N --stack S` | 用 `tools/presets/S.toml` 生成 `keel.toml`，替换占位符，启用 `.githooks` | — |
+| `adopt` | 已有项目接入 keel：把现存的不合规卡写进存量清单（只写一次） | — |
 | `new <type> <slug> [--light]` | 从模板开卡，填好类型、日期和基线 commit | — |
 | `status [--all]` | 按状态列出卡 | — |
 | `lint [卡…]` | 卡的结构：front matter、必需的节、`D<n>` 都绑定了检查、状态与证据一致 | 卡的格式不合格，或者声称完成但缺少证据 |
@@ -66,6 +67,42 @@ GATE: 9f8e7d6c5b4a+dirty ok build=0 test=0[812p/0f] … (2026-01-02)
 - **修订。** `## 修订` 下写「D<n> … 作者确认 YYYY-MM-DD」的条目，`freeze-check` 才放行对应编号的改动。
 - **允许弱化。** `WEAKEN-OK: <测试文件> <理由>（作者确认 YYYY-MM-DD）` 让 `assert-guard` 放过那个文件。
 
+## 在已有项目中采用
+
+已有项目的老卡格式各不相同，不需要一次改完：
+
+```bash
+cp <keel>/tools/keel.py tools/keel.py      # 内核原样复制，不就地修改
+# 写 keel.toml：gate 步骤沿用项目原有的「完成」定义
+python3 tools/keel.py adopt                 # 生成 docs/tasks/legacy.txt
+```
+
+- 清单里的卡**豁免** lint / freeze-check / audit-red / 链接检查；不在清单里的卡必须合规。
+- 清单**只能缩短**：`freeze-check` 拿当前清单和它第一次提交的版本比较，多出来的名字就失败。迁移一张老卡，就是把它改合规，然后删掉它那一行。
+- 清单里列的卡如果已经不存在，lint 失败（防止清单腐烂）。
+- 文档预算按现状设成**棘轮**：`agents_max_lines`、`playbook_max_rules` 填当前值，只降不升。
+
+## 多套测试命令
+
+多语言仓库在 `[red.profile.<名字>]` 里声明另外的测试命令，未声明的字段继承 `[red]`；`cwd` 是相对仓库根的运行目录：
+
+```toml
+[red.profile.web]
+runner = "vitest"
+cwd = "web"
+command = ["pnpm", "exec", "vitest", "run", "-t", "{filter}"]
+link = ["web/node_modules"]
+```
+
+卡里用 `RED(web): <commit> <过滤串>`，故障补丁用 ```` ```diff keel-inject(web) <过滤串> ````。
+
+`command` 里的 `{filter}` 会把过滤串当成一个参数整体替换；`{args}` 则按 shell 规则拆成多个参数，适合需要多个选择参数的测试命令：
+
+```toml
+command = ["cargo", "test", "--locked", "{args}"]
+# RED: 1a2b3c4 -p server --test ssh_agent live_policy::
+```
+
 ## verify-red 判定什么
 
 **红**必须同时满足：
@@ -87,6 +124,7 @@ GATE: 9f8e7d6c5b4a+dirty ok build=0 test=0[812p/0f] … (2026-01-02)
 name = "test"
 cmd = ["cargo", "test", "--locked"]
 runner = "cargo"              # 可选：解析计数；选中 0 个测试就判失败
+cwd = "."                     # 可选：相对仓库根的运行目录
 
 [red]
 runner = "cargo"
@@ -106,6 +144,21 @@ suspicious_patterns = ['…']   # 早退出、永远相等
 agents_max_lines = 150
 playbook_max_rules = 120
 glossary_source_dirs = ["src"]
+# 文档位置（以下为默认值）
+agents = "AGENTS.md"
+playbook = "docs/PLAYBOOK.md"
+progress = "docs/PROGRESS.md"
+plan = "PLAN.md"
+decisions_heading = "决策记录"   # 只检查这个标题下的表格编号
+invariants = "docs/INVARIANTS.md"
+fixtures = "docs/FIXTURES.md"
+glossary = "CONTEXT.md"
+link_exclude = []                # 不做链接检查的 glob，例如归档的调研目录
+map_files = []                   # 检查反引号路径的「地图」文件；空 = agents、fixtures、invariants
+
+[paths]
+tasks = "docs/tasks"
+legacy_manifest = "docs/tasks/legacy.txt"
 
 [[boundary.rule]]
 name = "core 不做 I/O"

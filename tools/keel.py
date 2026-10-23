@@ -23,6 +23,7 @@ import datetime as _dt
 import fnmatch
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -107,13 +108,18 @@ def find_root(explicit: str | None) -> Path:
 
 DEFAULT_CONFIG: dict = {
     "project": {"name": "project", "stack": "custom"},
-    "paths": {"tasks": "docs/tasks"},
+    "paths": {"tasks": "docs/tasks", "legacy_manifest": "docs/tasks/legacy.txt"},
     "gate": {"step": []},
-    "red": {"runner": "custom", "command": [], "link": [], "env": {}, "timeout_s": 1800},
+    "red": {"runner": "custom", "command": [], "link": [], "env": {}, "timeout_s": 1800, "cwd": ".",
+            "profile": {}},
     "tests": {"paths": [], "inline_paths": [], "assert_patterns": [], "skip_patterns": [],
               "suspicious_patterns": []},
     "guard": {"base": "main"},
-    "docs": {"agents_max_lines": 150, "playbook_max_rules": 120, "glossary_source_dirs": []},
+    "docs": {"agents_max_lines": 150, "playbook_max_rules": 120, "glossary_source_dirs": [],
+             "agents": "AGENTS.md", "playbook": "docs/PLAYBOOK.md", "progress": "docs/PROGRESS.md",
+             "plan": "PLAN.md", "decisions_heading": "决策记录", "invariants": "docs/INVARIANTS.md",
+             "fixtures": "docs/FIXTURES.md", "glossary": "CONTEXT.md", "link_exclude": [],
+             "map_files": []},
     "mutate": {"command": []},
     "boundary": {"rule": []},
 }
@@ -160,6 +166,7 @@ class Red:
     revision: str
     filter: str
     line: int
+    profile: str = ""
 
 
 @dataclass
@@ -167,6 +174,7 @@ class Inject:
     filter: str
     patch: str
     line: int
+    profile: str = ""
 
 
 @dataclass
@@ -187,9 +195,9 @@ class Card:
 
 D_LINE = re.compile(r"^- \*\*D(\d+)\*\*\s*(.*)$")
 CHECK_LINE = re.compile(r"^\s+- 检[：:]\s*(\w+)\s*(.*)$")
-RED_LINE = re.compile(r"^RED:\s+(\S+)\s+(.+?)\s*$")
+RED_LINE = re.compile(r"^RED(?:\(([\w-]+)\))?:\s+(\S+)\s+(.+?)\s*$")
 GATE_LINE = re.compile(r"^GATE:\s+(\S+)\s+(ok|fail)\b(.*)$")
-INJECT_OPEN = re.compile(r"^```diff\s+keel-inject\s+(.+?)\s*$")
+INJECT_OPEN = re.compile(r"^```diff\s+keel-inject(?:\(([\w-]+)\))?\s+(.+?)\s*$")
 WEAKEN_LINE = re.compile(rf"^WEAKEN-OK:\s+(\S+)\s+.*作者确认\s*{DATE}")
 
 
@@ -213,7 +221,7 @@ def parse_card(text: str, rel: str) -> Card:
     meta, start = parse_frontmatter(lines)
     card = Card(rel, text, meta, [], {}, [], [], [], [], set(), [], [])
     fence: str | None = None   # None, "code", or "inject"
-    inject_filter, inject_body, inject_line = "", [], 0
+    inject_filter, inject_body, inject_line, inject_profile = "", [], 0, ""
     section = ""
     current: Item | None = None
     in_comment = False  # HTML comments hold format help; their examples are not claims
@@ -229,14 +237,15 @@ def parse_card(text: str, rel: str) -> Card:
         if fence:
             if line.strip() == "```":
                 if fence == "inject":
-                    card.injects.append(Inject(inject_filter, "\n".join(inject_body) + "\n", inject_line))
+                    card.injects.append(Inject(inject_filter, "\n".join(inject_body) + "\n", inject_line,
+                                               inject_profile))
                 fence = None
             elif fence == "inject":
                 inject_body.append(line)
             continue
         m = INJECT_OPEN.match(line)
         if m:
-            fence, inject_filter, inject_body, inject_line = "inject", m.group(1), [], n
+            fence, inject_profile, inject_filter, inject_body, inject_line = "inject", m.group(1) or "", m.group(2), [], n
             continue
         if line.startswith("```"):
             fence = "code"
@@ -274,12 +283,12 @@ def parse_card(text: str, rel: str) -> Card:
                 card.revised.add(int(rid))
         rm = RED_LINE.match(line)
         if rm:
-            rev, rest = rm.group(1), rm.group(2)
+            profile, rev, rest = rm.group(1) or "", rm.group(2), rm.group(3)
             if rev == "none":
                 card.red_none.append((rest, n))
             elif HEX.match(rev):
                 filt = re.sub(r"\s+#\s*D\d+(?:\s*,\s*D\d+)*\s*$", "", rest).strip()
-                card.reds.append(Red(rev, filt, n))
+                card.reds.append(Red(rev, filt, n, profile))
             else:
                 card.errors.append(f"line {n}: RED revision {rev!r} is not a commit id")
             continue
@@ -295,11 +304,27 @@ def parse_card(text: str, rel: str) -> Card:
     return card
 
 
-def card_paths(root: Path, cfg: dict) -> list[Path]:
+def all_card_paths(root: Path, cfg: dict) -> list[Path]:
     tasks = root / cfg["paths"]["tasks"]
     if not tasks.is_dir():
         return []
     return sorted(p for p in tasks.glob("*.md") if not p.name.startswith(("TEMPLATE", "README")))
+
+
+def read_manifest(text: str) -> list[str]:
+    return [l.strip() for l in text.splitlines() if l.strip() and not l.lstrip().startswith("#")]
+
+
+def legacy_names(root: Path, cfg: dict) -> list[str]:
+    """Cards that predate keel in an adopted project. They keep their old format;
+    every card not listed must comply. The list may only shrink (freeze-check)."""
+    path = root / cfg["paths"]["legacy_manifest"]
+    return read_manifest(path.read_text(encoding="utf-8")) if path.exists() else []
+
+
+def card_paths(root: Path, cfg: dict) -> list[Path]:
+    legacy = set(legacy_names(root, cfg))
+    return [p for p in all_card_paths(root, cfg) if p.name not in legacy]
 
 
 def load_card(root: Path, path: str | Path) -> Card:
@@ -452,11 +477,22 @@ RUNNERS = {"cargo": parse_cargo, "go": parse_go, "bun": parse_bun, "pytest": par
            "vitest": parse_vitest, "jest": parse_jest, "unittest": parse_unittest}
 
 
-def summarize(cfg: dict, runner: str, out: str) -> TestSummary:
+def red_config(cfg: dict, profile: str = "") -> dict:
+    """The RED settings for one test runner. A polyglot repository declares
+    extra runners as [red.profile.<name>]; a claim selects one as RED(<name>)."""
+    base = {k: v for k, v in cfg["red"].items() if k != "profile"}
+    if not profile:
+        return base
+    profiles = cfg["red"].get("profile", {})
+    if profile not in profiles:
+        raise KeelError(f"unknown RED profile `{profile}`; declared: {', '.join(profiles) or 'none'}")
+    return {**base, **profiles[profile]}
+
+
+def summarize(red: dict, runner: str, out: str) -> TestSummary:
     out = strip_ansi(out)
     if runner in RUNNERS:
         return RUNNERS[runner](out)
-    red = cfg["red"]
     if runner == "custom" and red.get("selected_re") and red.get("failed_re"):
         if red.get("invalid_re") and re.search(red["invalid_re"], out, re.M):
             return TestSummary(0, 0, "matched invalid_re")
@@ -464,30 +500,46 @@ def summarize(cfg: dict, runner: str, out: str) -> TestSummary:
     raise KeelError(f"unknown runner `{runner}`: set red.runner, or red.selected_re/failed_re for `custom`")
 
 
-def test_env(root: Path, cfg: dict) -> dict:
+def test_env(root: Path, red: dict) -> dict:
     cache = root / ".keel" / "cache"
     cache.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ)
     # Coloured summaries break the count parsers and turn a real red into "matched 0".
     env.update({"NO_COLOR": "1", "FORCE_COLOR": "0", "CARGO_TERM_COLOR": "never", "CI": env.get("CI", "1")})
-    for k, v in cfg["red"].get("env", {}).items():
+    for k, v in red.get("env", {}).items():
         env[k] = str(v).replace("{cache}", str(cache))
     return env
 
 
-def run_filter(root: Path, cfg: dict, cwd: Path, filt: str) -> tuple[int | None, TestSummary, str]:
-    template = cfg["red"]["command"]
-    if not template or not any("{filter}" in a for a in template):
-        raise KeelError("red.command in keel.toml must contain a `{filter}` argument")
-    cmd = [a.replace("{filter}", filt) for a in template]
+def build_command(template: list[str], filt: str) -> list[str]:
+    """`{filter}` substitutes the claim text as one argument; `{args}` splits it
+    with shell rules, for runners whose selection takes several flags
+    (e.g. `-p crate --test suite name::`)."""
+    if not template or not any("{filter}" in a or a == "{args}" for a in template):
+        raise KeelError("red.command in keel.toml must contain a `{filter}` or `{args}` argument")
+    cmd: list[str] = []
+    for a in template:
+        if a == "{args}":
+            try:
+                cmd += shlex.split(filt)
+            except ValueError as e:
+                raise KeelError(f"cannot split filter {filt!r}: {e}")
+        else:
+            cmd.append(a.replace("{filter}", filt))
+    return cmd
+
+
+def run_filter(root: Path, red: dict, tree: Path, filt: str) -> tuple[int | None, TestSummary, str]:
+    cmd = build_command(red["command"], filt)
+    cwd = tree / red.get("cwd", ".")
     try:
-        p = run(cmd, cwd, env=test_env(root, cfg), timeout=float(cfg["red"].get("timeout_s", 1800)))
+        p = run(cmd, cwd, env=test_env(root, red), timeout=float(red.get("timeout_s", 1800)))
     except subprocess.TimeoutExpired:
         return None, TestSummary(0, 0, "timed out"), ""
     except FileNotFoundError:
-        raise KeelError(f"cannot run `{cmd[0]}`")
+        raise KeelError(f"cannot run `{cmd[0]}` in {cwd}")
     out = p.stdout + p.stderr
-    return p.returncode, summarize(cfg, cfg["red"]["runner"], out), out
+    return p.returncode, summarize(red, red["runner"], out), out
 
 
 def tail(out: str, n: int = 12) -> str:
@@ -522,8 +574,8 @@ def require_green(code: int | None, s: TestSummary, out: str, where: str) -> Non
 class Worktree:
     """A throwaway checkout, removed on every exit path (including errors)."""
 
-    def __init__(self, root: Path, cfg: dict, rev: str):
-        self.root, self.cfg, self.rev = root, cfg, rev
+    def __init__(self, root: Path, red: dict, rev: str):
+        self.root, self.links, self.rev = root, list(red.get("link", [])), rev
         self.path = Path(tempfile.mkdtemp(prefix="keel-red-"))
 
     def __enter__(self) -> Path:
@@ -531,14 +583,14 @@ class Worktree:
         if p.returncode != 0:
             shutil.rmtree(self.path, ignore_errors=True)
             raise KeelError(f"could not create a worktree at {self.rev}: {p.stderr.strip()}")
-        for name in self.cfg["red"].get("link", []):
+        for name in self.links:
             src, dst = self.root / name, self.path / name
             if src.exists() and not dst.exists():
                 dst.symlink_to(src, target_is_directory=src.is_dir())
         return self.path
 
     def __exit__(self, *exc) -> None:
-        for name in self.cfg["red"].get("link", []):
+        for name in self.links:
             dst = self.path / name
             if dst.is_symlink():
                 dst.unlink()  # never let a recursive delete walk into the real directory
@@ -587,18 +639,20 @@ def cmd_verify_red(root: Path, cfg: dict, args) -> None:
         raise KeelError("; ".join(card.errors))
     if not card.reds and not card.injects:
         raise KeelError(f"{card.rel} has no `RED: <commit> <filter>` line and no keel-inject block")
-    filters: list[str] = []
+    filters: list[tuple[str, str]] = []
     for red in card.reds:
         sha = resolve_commit(root, red.revision)
         if not sha:
             raise KeelError(f"line {red.line}: RED commit {red.revision} does not exist in this repository")
-        print(f"RED     {sha[:12]}  {red.filter}")
-        with Worktree(root, cfg, sha) as wt:
-            code, s, out = run_filter(root, cfg, wt, red.filter)
+        rc = red_config(cfg, red.profile)
+        label = f"({red.profile}) " if red.profile else ""
+        print(f"RED     {sha[:12]}  {label}{red.filter}")
+        with Worktree(root, rc, sha) as wt:
+            code, s, out = run_filter(root, rc, wt, red.filter)
             require_red(code, s, out, f"line {red.line}")
         retain(root, sha)
         print(f"        red: {s.failed}/{s.selected} selected tests failed, exit {code}")
-        filters.append(red.filter)
+        filters.append((red.profile, red.filter))
     base = resolve_commit(root, args.at or "HEAD")
     if card.injects and not base:
         raise KeelError(f"cannot resolve {args.at or 'HEAD'}")
@@ -610,20 +664,21 @@ def cmd_verify_red(root: Path, cfg: dict, args) -> None:
         bad = [p for p in touched if glob_match(p, test_paths)]
         if bad:
             raise KeelError(f"line {inj.line}: an injected fault must break product code, not tests: {', '.join(bad)}")
+        rc = red_config(cfg, inj.profile)
         print(f"INJECT  {base[:12]}+patch  {inj.filter}  ({', '.join(touched)})")
-        with Worktree(root, cfg, base) as wt:
+        with Worktree(root, rc, base) as wt:
             p = git(wt, "apply", "--whitespace=nowarn", "-", input=inj.patch)
             if p.returncode != 0:
                 raise KeelError(f"line {inj.line}: the fault patch does not apply to {base[:12]}: {p.stderr.strip()}")
-            code, s, out = run_filter(root, cfg, wt, inj.filter)
+            code, s, out = run_filter(root, rc, wt, inj.filter)
             require_red(code, s, out, f"line {inj.line}")
         print(f"        red: {s.failed}/{s.selected} selected tests failed under the injected fault")
-        filters.append(inj.filter)
+        filters.append((inj.profile, inj.filter))
     if args.no_green:
         print("GREEN   skipped (--no-green)")
     else:
-        for filt in dict.fromkeys(filters):
-            code, s, out = run_filter(root, cfg, root, filt)
+        for profile, filt in dict.fromkeys(filters):
+            code, s, out = run_filter(root, red_config(cfg, profile), root, filt)
             require_green(code, s, out, f"green `{filt}`")
             print(f"GREEN   working tree  {filt}  ({s.selected} selected, all pass)")
     print(f"ok      {len(card.reds)} RED claim(s), {len(card.injects)} injected fault(s) verified")
@@ -661,7 +716,15 @@ def cmd_lint(root: Path, cfg: dict, args) -> None:
             print(f"FAIL  {card.rel}")
             for p in probs:
                 print(f"      - {p}")
-    print(f"lint: {len(paths)} card(s), {failed} with problems")
+    legacy = legacy_names(root, cfg)
+    existing = {p.name for p in all_card_paths(root, cfg)}
+    stale = [n for n in legacy if n not in existing]
+    if stale and not args.cards:
+        failed += 1
+        print(f"FAIL  {cfg['paths']['legacy_manifest']}: lists missing card(s): {', '.join(stale[:5])}"
+              f"{' …' if len(stale) > 5 else ''}")
+    note = f", {len(legacy) - len(stale)} legacy skipped" if legacy else ""
+    print(f"lint: {len(paths)} card(s), {failed} with problems{note}")
     if failed:
         raise KeelError("card lint failed")
 
@@ -683,6 +746,13 @@ def first_committed(root: Path, rel: str) -> tuple[str, str] | None:
 def cmd_freeze_check(root: Path, cfg: dict, args) -> None:
     paths = [Path(p) for p in args.cards] if args.cards else card_paths(root, cfg)
     problems = []
+    manifest = cfg["paths"]["legacy_manifest"]
+    first_manifest = first_committed(root, manifest) if not args.cards else None
+    if first_manifest:
+        grown = set(legacy_names(root, cfg)) - set(read_manifest(first_manifest[1]))
+        if grown:
+            problems.append(f"{manifest}: grew since {first_manifest[0][:12]} ({', '.join(sorted(grown)[:5])}); "
+                            "the legacy list may only shrink: new cards must comply")
     for path in paths:
         card = load_card(root, path)
         status, weight = card.meta.get("status"), card.meta.get("weight")
@@ -806,8 +876,8 @@ def cmd_gate(root: Path, cfg: dict, args) -> None:
         start = _dt.datetime.now()
         try:
             with log.open("w", encoding="utf-8") as fh:
-                code = subprocess.run(cmd, cwd=root, stdout=fh, stderr=subprocess.STDOUT,
-                                      env=test_env(root, cfg), timeout=step.get("timeout_s")).returncode
+                code = subprocess.run(cmd, cwd=root / step.get("cwd", "."), stdout=fh, stderr=subprocess.STDOUT,
+                                      env=test_env(root, red_config(cfg)), timeout=step.get("timeout_s")).returncode
         except FileNotFoundError:
             code = 127
         except subprocess.TimeoutExpired:
@@ -815,7 +885,7 @@ def cmd_gate(root: Path, cfg: dict, args) -> None:
         secs = (_dt.datetime.now() - start).total_seconds()
         extra = ""
         if step.get("runner") and code is not None:
-            s = summarize(cfg, step["runner"], log.read_text(encoding="utf-8", errors="replace"))
+            s = summarize(red_config(cfg), step["runner"], log.read_text(encoding="utf-8", errors="replace"))
             extra = f"[{s.selected - s.failed}p/{s.failed}f]"
             if s.selected == 0:
                 code, extra = code or 1, "[0 tests: a test step that runs nothing is not green]"
@@ -858,56 +928,101 @@ LINK = re.compile(r"\]\(([^)\s]+)\)")
 BACKTICK = re.compile(r"`([^`\s]+)`")
 
 
+def map_path_exists(root: Path, tok: str) -> bool:
+    """A map names a path, optionally followed by a symbol (`pkg/file.Func`,
+    `dir/mod.rs::item`) or a Go package pattern (`internal/agent/...`)."""
+    path = tok.split("#")[0].split("::")[0]
+    path = re.sub(r"/\.\.\.$", "", path).rstrip("/")
+    while path:
+        if (root / path).exists():
+            return True
+        head, _, last = path.rpartition("/")
+        if "." not in last:
+            return False
+        path = f"{head}/{last.rsplit('.', 1)[0]}" if head else last.rsplit(".", 1)[0]
+    return False
+
+
+def section_text(text: str, heading: str) -> str | None:
+    """The body under the first heading containing `heading`, up to the next
+    heading of the same or a higher level."""
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        m = re.match(r"^(#{1,6}) (.*)$", line)
+        if m and heading in m.group(2):
+            level, body = len(m.group(1)), []
+            for nxt in lines[i + 1:]:
+                n = re.match(r"^(#{1,6}) ", nxt)
+                if n and len(n.group(1)) <= level:
+                    break
+                body.append(nxt)
+            return "\n".join(body)
+    return None
+
+
 def cmd_check_docs(root: Path, cfg: dict, args) -> None:
     d = cfg["docs"]
     probs: list[str] = []
-    agents = root / "AGENTS.md"
+    doc = lambda key: root / d[key]  # noqa: E731
+    agents = doc("agents")
     if not agents.exists():
-        probs.append("AGENTS.md is missing")
+        probs.append(f"{d['agents']} is missing")
     else:
         n = len(agents.read_text(encoding="utf-8").splitlines())
         if n > int(d["agents_max_lines"]):
-            probs.append(f"AGENTS.md has {n} lines > {d['agents_max_lines']}: it is a map, move detail "
-                         "into docs/PLAYBOOK.md or into a mechanical check")
+            probs.append(f"{d['agents']} has {n} lines > {d['agents_max_lines']}: it is a map, move detail "
+                         f"into {d['playbook']} or into a mechanical check")
     top = {p.name for p in root.iterdir()}
-    md_files = [root / f for f in tracked_files(root) if f.endswith(".md") and (root / f).exists()]
-    for f in md_files:
-        rel = f.relative_to(root)
+    legacy = {str(Path(cfg["paths"]["tasks"]) / n) for n in legacy_names(root, cfg)}
+    maps = set(d.get("map_files") or [d["agents"], d["fixtures"], d["invariants"]])
+    md_files = [f for f in tracked_files(root) if f.endswith(".md") and (root / f).exists()]
+    checked = 0
+    for rel in md_files:
+        if rel in legacy or glob_match(rel, d.get("link_exclude", [])):
+            continue
+        checked += 1
+        f = root / rel
         text = f.read_text(encoding="utf-8")
-        text_nocode = re.sub(r"```.*?```", "", text, flags=re.S)
-        for target in LINK.findall(text_nocode):
+        prose = re.sub(r"`[^`\n]*`", "", re.sub(r"```.*?```", "", text, flags=re.S))
+        for target in LINK.findall(prose):
             if re.match(r"^[a-z]+:|^#|^mailto:", target):
                 continue
             path = target.split("#")[0]
-            if path and not (f.parent / path).exists():
+            if path.startswith("/"):
+                probs.append(f"{rel}: absolute link `{target}` (machine-specific; it also leaks local paths)")
+            elif path and not (f.parent / path).exists():
                 probs.append(f"{rel}: broken link `{target}`")
-        if rel.name in ("AGENTS.md", "FIXTURES.md", "INVARIANTS.md"):
-            for tok in BACKTICK.findall(text_nocode):
-                if "/" not in tok or re.search(r"[<>⟨⟩*{}$:|]", tok) or tok.startswith(("http", "-", ".")):
+        if rel in maps:
+            for tok in BACKTICK.findall(re.sub(r"```.*?```", "", text, flags=re.S)):
+                if "/" not in tok or re.search(r"[<>⟨⟩*{}$:|]", tok.replace("::", "")) or tok.startswith(("http", "-", ".")):
                     continue
-                path = tok.split("#")[0].rstrip("/")
-                if path.split("/")[0] in top and not (root / path).exists():
+                if tok.split("/")[0] in top and not map_path_exists(root, tok):
                     probs.append(f"{rel}: `{tok}` does not exist (stale path in a map file)")
-    playbook = root / "docs" / "PLAYBOOK.md"
+    playbook = doc("playbook")
     if playbook.exists():
         rules = len(re.findall(r"^- \*\*", playbook.read_text(encoding="utf-8"), re.M))
         if rules > int(d["playbook_max_rules"]):
-            probs.append(f"docs/PLAYBOOK.md has {rules} rules > {d['playbook_max_rules']}: merge them, or turn "
+            probs.append(f"{d['playbook']} has {rules} rules > {d['playbook_max_rules']}: merge them, or turn "
                          "the checkable ones into keel/boundary checks and delete the prose")
-    plan = root / "PLAN.md"
+    plan = doc("plan")
     if plan.exists():
-        nums = [int(x) for x in re.findall(r"^\|\s*(\d+)\s*\|", plan.read_text(encoding="utf-8"), re.M)]
-        if nums != sorted(set(nums)):
-            probs.append(f"PLAN.md decision numbers are not unique and increasing: {nums}")
-    probs += check_registry(root, root / "docs" / "INVARIANTS.md", "INV")
-    probs += check_registry(root, root / "docs" / "FIXTURES.md", None)
-    progress = root / "docs" / "PROGRESS.md"
+        body = section_text(plan.read_text(encoding="utf-8"), d["decisions_heading"])
+        if body is not None:
+            nums = [int(x) for x in re.findall(r"^\|\s*(\d+)\s*\|", body, re.M)]
+            bad = [f"{a}→{b}" for a, b in zip(nums, nums[1:]) if b <= a]
+            if bad:
+                probs.append(f"{d['plan']}: decision numbers under `{d['decisions_heading']}` must be unique "
+                             f"and increasing; out of order at {', '.join(bad[:8])}")
+    probs += check_registry(root, doc("invariants"), "INV")
+    probs += check_registry(root, doc("fixtures"), None)
+    progress = doc("progress")
     if progress.exists():
         dates = re.findall(rf"^## ({DATE})", progress.read_text(encoding="utf-8"), re.M)
-        if dates != sorted(dates, reverse=True):
-            probs.append("docs/PROGRESS.md: entries must be newest first")
-    probs += check_glossary(root, d.get("glossary_source_dirs", []))
-    print(f"check-docs: {len(md_files)} markdown file(s), {len(probs)} problem(s)")
+        bad = [f"{b} after {a}" for a, b in zip(dates, dates[1:]) if b > a]
+        if bad:
+            probs.append(f"{d['progress']}: entries must be newest first; {', '.join(bad[:5])}")
+    probs += check_glossary(root, doc("glossary"), d.get("glossary_source_dirs", []))
+    print(f"check-docs: {checked} markdown file(s) checked, {len(probs)} problem(s)")
     if probs:
         raise KeelError("\n".join(probs))
 
@@ -964,8 +1079,7 @@ def check_registry(root: Path, path: Path, prefix: str | None) -> list[str]:
     return probs
 
 
-def check_glossary(root: Path, dirs: list[str]) -> list[str]:
-    ctx = root / "CONTEXT.md"
+def check_glossary(root: Path, ctx: Path, dirs: list[str]) -> list[str]:
     if not dirs or not ctx.exists():
         return []
     rows = table_rows(ctx.read_text(encoding="utf-8"))
@@ -1052,7 +1166,26 @@ def cmd_status(root: Path, cfg: dict, args) -> None:
         rows = [r for r in rows if r[0] != "done"]
     for r in rows:
         print(f"{r[0]:<16} {r[1]:<9} {r[2]:<6} {r[3]:<11} {r[4]}")
-    print(f"{len(rows)} card(s){'' if args.all else ' (done hidden; --all to show)'}")
+    legacy = len(legacy_names(root, cfg))
+    print(f"{len(rows)} card(s){'' if args.all else ' (done hidden; --all to show)'}"
+          f"{f', {legacy} legacy not shown' if legacy else ''}")
+
+
+def cmd_adopt(root: Path, cfg: dict, args) -> None:
+    """Bring keel into an existing project: freeze the list of cards that do not
+    comply. Written once; afterwards it may only shrink."""
+    rel = cfg["paths"]["legacy_manifest"]
+    manifest = root / rel
+    if manifest.exists():
+        raise KeelError(f"{rel} already exists; the legacy list is written once, at adoption")
+    cards = all_card_paths(root, cfg)
+    legacy = [p.name for p in cards if lint_card(load_card(root, p))]
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    header = (f"# keel legacy cards, written by `keel adopt` on {_dt.date.today()}.\n"
+              "# They predate keel and keep their old format; every card not listed must comply.\n"
+              "# This list may only shrink (freeze-check). To migrate a card, fix it and delete its line.\n")
+    manifest.write_text(header + "".join(f"{n}\n" for n in legacy), encoding="utf-8")
+    print(f"adopt: {len(legacy)} legacy card(s) of {len(cards)} written to {rel}")
 
 
 def cmd_new(root: Path, cfg: dict, args) -> None:
@@ -1149,6 +1282,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--light", action="store_true")
     s = sub.add_parser("mutate", help="run the configured diff-scoped mutation tool")
     s.add_argument("--base")
+    sub.add_parser("adopt", help="existing project: freeze the list of legacy cards")
     s = sub.add_parser("init", help="turn the template into a project")
     s.add_argument("--name", required=True)
     s.add_argument("--stack", required=True)
@@ -1158,7 +1292,7 @@ def main(argv: list[str] | None = None) -> int:
                 "freeze-check": cmd_freeze_check, "assert-guard": cmd_assert_guard, "gate": cmd_gate,
                 "check-docs": cmd_check_docs, "check-boundaries": cmd_check_boundaries,
                 "snapshot": cmd_snapshot, "status": cmd_status, "new": cmd_new, "mutate": cmd_mutate,
-                "init": cmd_init}
+                "init": cmd_init, "adopt": cmd_adopt}
     try:
         handlers[args.cmd](root, load_config(root), args)
     except KeelError as e:

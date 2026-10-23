@@ -27,6 +27,16 @@ MUTANTS = [
     ("boundary ignored", "                    if re.search(pat, line):\n                        probs.append(f\"{f}:{i}: [", "                    if False:\n                        probs.append(f\"{f}:{i}: ["),
     ("registry symbol ignored", "            elif not symbol_exists(root, files, tok):", "            elif False:"),
     ("comment claims parsed", "            if in_comment:\n                in_comment = \"-->\" not in line\n                continue", "            if False:\n                pass"),
+    ("legacy growth ignored", "        if grown:\n            problems.append(", "        if False:\n            problems.append("),
+    ("stale legacy entry ignored", "    if stale and not args.cards:", "    if False:"),
+    ("legacy cards linted", "    return [p for p in all_card_paths(root, cfg) if p.name not in legacy]", "    return all_card_paths(root, cfg)"),
+    ("adopt lists compliant cards", "    legacy = [p.name for p in cards if lint_card(load_card(root, p))]", "    legacy = [p.name for p in cards]"),
+    ("profile ignored", "    return {**base, **profiles[profile]}", "    return base"),
+    ("profile cwd ignored", "    cwd = tree / red.get(\"cwd\", \".\")", "    cwd = tree"),
+    ("args not split", "                cmd += shlex.split(filt)", "                cmd.append(filt)"),
+    ("decisions unscoped", "        body = section_text(plan.read_text(encoding=\"utf-8\"), d[\"decisions_heading\"])", "        body = plan.read_text(encoding=\"utf-8\")"),
+    ("absolute link allowed", "            if path.startswith(\"/\"):", "            if False:"),
+    ("inline code linked", "        prose = re.sub(r\"`[^`\\n]*`\", \"\", re.sub(", "        prose = (lambda x: x)(re.sub("),
 ]
 survived = []
 for name, old, new in MUTANTS:

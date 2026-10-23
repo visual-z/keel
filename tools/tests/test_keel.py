@@ -407,6 +407,101 @@ class AssertGuard(RepoCase):
         self.assertKeelPasses(["assert-guard"])
 
 
+class Legacy(RepoCase):
+    """Adopting keel in an existing project: old cards keep their format,
+    new cards must comply, and the exemption list can only shrink."""
+
+    def old_cards(self):
+        self.r.write("docs/tasks/F-old-thing.md", "# old\n\nRED: replacing a line by hand turned it red\n")
+        self.r.write("docs/tasks/fix-old-bug.md", "# old\n")
+        self.r.write("docs/tasks/fix-add.md", card_text())
+
+    def test_adopt_lists_only_the_cards_that_do_not_comply(self):
+        self.old_cards()
+        out = self.assertKeelPasses(["adopt"])
+        self.assertIn("2 legacy card(s)", out)
+        names = keel.read_manifest((self.r.root / "docs/tasks/legacy.txt").read_text())
+        self.assertEqual(names, ["F-old-thing.md", "fix-old-bug.md"])
+        out = self.assertKeelPasses(["lint"])
+        self.assertIn("2 legacy skipped", out)
+        self.assertKeelPasses(["audit-red"])
+
+    def test_adopt_refuses_to_overwrite_an_existing_manifest(self):
+        self.old_cards()
+        self.assertKeelPasses(["adopt"])
+        self.assertKeelFails(["adopt"], "already exists")
+
+    def test_a_new_non_compliant_card_is_not_exempt(self):
+        self.old_cards()
+        self.assertKeelPasses(["adopt"])
+        self.r.write("docs/tasks/fix-new-bug.md", "# new but sloppy\n")
+        self.assertKeelFails(["lint"], "fix-new-bug.md")
+
+    def test_a_manifest_entry_for_a_missing_card_fails(self):
+        self.old_cards()
+        self.assertKeelPasses(["adopt"])
+        (self.r.root / "docs/tasks/fix-old-bug.md").unlink()
+        self.assertKeelFails(["lint"], "lists missing card")
+
+    def test_growing_the_legacy_list_after_adoption_fails_the_freeze_check(self):
+        self.old_cards()
+        self.assertKeelPasses(["adopt"])
+        self.r.commit("adopt keel")
+        self.r.write("docs/tasks/fix-new-bug.md", "# sloppy\n")
+        with (self.r.root / "docs/tasks/legacy.txt").open("a") as fh:
+            fh.write("fix-new-bug.md\n")
+        self.assertKeelFails(["freeze-check"], "may only shrink")
+
+    def test_legacy_cards_are_skipped_by_the_link_check(self):
+        self.r.write("AGENTS.md", "x\n")
+        self.r.write("docs/tasks/F-old-thing.md", "# old\n[gone](evidence/raw.json)\n")
+        self.assertKeelPasses(["adopt"])
+        self.r.commit()
+        self.assertKeelPasses(["check-docs"])
+
+
+class Profiles(RepoCase):
+    """A polyglot repository runs RED claims through more than one test runner."""
+
+    def web_profile(self):
+        toml = KEEL_TOML + f"""
+[red.profile.web]
+runner = "unittest"
+cwd = "web"
+command = [{PY!r}, "-m", "unittest", "discover", "-s", ".", "-k", "{{filter}}"]
+"""
+        self.r.write("keel.toml", toml)
+        self.r.write("web/calc.py", BUGGY)
+        self.r.write("web/test_calc.py", TEST)
+        red = self.r.commit()
+        self.r.write("web/calc.py", FIXED)
+        self.r.commit()
+        return red
+
+    def test_a_profiled_claim_runs_in_the_profile_directory(self):
+        red = self.web_profile()
+        self.r.write("docs/tasks/fix-add.md", card_text(evidence=f"RED(web): {red} test_adds_two_numbers\n"))
+        out = self.assertKeelPasses(["verify-red", "docs/tasks/fix-add.md"])
+        self.assertIn("(web)", out)
+
+    def test_the_default_runner_does_not_see_the_profiled_tests(self):
+        red = self.web_profile()
+        self.r.write("docs/tasks/fix-add.md", card_text(evidence=f"RED: {red} test_adds_two_numbers\n"))
+        self.assertKeelFails(["verify-red", "docs/tasks/fix-add.md"], "selected 0 tests")
+
+    def test_an_unknown_profile_fails(self):
+        red = self.web_profile()
+        self.r.write("docs/tasks/fix-add.md", card_text(evidence=f"RED(ios): {red} test_adds\n"))
+        self.assertKeelFails(["verify-red", "docs/tasks/fix-add.md"], "unknown RED profile `ios`")
+
+    def test_args_placeholder_splits_the_filter_with_shell_rules(self):
+        self.assertEqual(keel.build_command(["cargo", "test", "{args}"], "-p core --test 'a b' name::"),
+                         ["cargo", "test", "-p", "core", "--test", "a b", "name::"])
+        self.assertEqual(keel.build_command(["x", "-k", "{filter}"], "a b"), ["x", "-k", "a b"])
+        with self.assertRaises(keel.KeelError):
+            keel.build_command(["x"], "a")
+
+
 class Gate(RepoCase):
     def test_a_green_gate_prints_counts_and_records_a_receipt(self):
         self.r.write("calc.py", FIXED)
@@ -448,9 +543,47 @@ class Docs(RepoCase):
 
     def test_decision_numbers_must_be_unique_and_increasing(self):
         self.r.write("AGENTS.md", "x\n")
-        self.r.write("PLAN.md", "| # | d |\n|---|---|\n| 1 | a |\n| 3 | b |\n| 2 | c |\n")
+        self.r.write("PLAN.md", "## 预算\n\n| # | x |\n|---|---|\n| 9 | a |\n| 1 | b |\n\n"
+                     "## 决策记录\n\n| # | d |\n|---|---|\n| 1 | a |\n| 3 | b |\n| 2 | c |\n\n## 风险\n\n| 1 | z |\n")
         self.r.commit()
-        self.assertKeelFails(["check-docs"], "decision numbers")
+        code, out = self.r.keel("check-docs")
+        self.assertEqual(code, 1, out)
+        self.assertIn("out of order at 3→2", out)
+        self.assertNotIn("9→1", out)  # numbered tables outside the decision section are not decisions
+
+    def test_decisions_in_order_pass_even_with_other_numbered_tables(self):
+        self.r.write("AGENTS.md", "x\n")
+        self.r.write("PLAN.md", "| 5 | a |\n| 1 | b |\n\n## 12. 已定决策记录\n\n| 1 | a |\n| 2 | b |\n")
+        self.r.commit()
+        self.assertKeelPasses(["check-docs"])
+
+    def test_inline_code_symbols_and_go_patterns_are_not_broken_paths(self):
+        self.r.write("AGENTS.md", "call `f[T](ctx)`; see `pkg/release.Parse`, `pkg/...` and `pkg/mod.rs::item`\n")
+        self.r.write("pkg/release/release.go", "package release\n")
+        self.r.write("pkg/mod.rs", "\n")
+        self.r.commit()
+        self.assertKeelPasses(["check-docs"])
+
+    def test_absolute_links_are_reported_and_excluded_paths_are_skipped(self):
+        self.r.write("AGENTS.md", "x\n")
+        self.r.write("docs/a.md", "[log](/home/someone/build.log)\n")
+        self.r.write("docs/research/old.md", "[gone](evidence/raw.json)\n")
+        self.r.commit()
+        code, out = self.r.keel("check-docs")
+        self.assertIn("absolute link", out)
+        self.assertIn("docs/research/old.md", out)
+        self.r.write("keel.toml", KEEL_TOML.replace('glossary_source_dirs = ["src"]',
+                                                     'glossary_source_dirs = ["src"]\nlink_exclude = ["docs/research/**"]'))
+        code, out = self.r.keel("check-docs")
+        self.assertNotIn("docs/research/old.md", out)
+
+    def test_doc_paths_are_configurable(self):
+        self.r.write("AGENTS.md", "x\n")
+        self.r.write("docs/AGENT_PLAYBOOK.md", "- **a** x\n" * 4)
+        self.r.write("keel.toml", KEEL_TOML.replace('glossary_source_dirs = ["src"]',
+                                                     'glossary_source_dirs = ["src"]\nplaybook = "docs/AGENT_PLAYBOOK.md"'))
+        self.r.commit()
+        self.assertKeelFails(["check-docs"], "docs/AGENT_PLAYBOOK.md has 4 rules > 3")
 
     def test_an_invariant_pointing_at_nothing_fails(self):
         self.r.write("AGENTS.md", "x\n")
