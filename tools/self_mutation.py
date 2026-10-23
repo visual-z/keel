@@ -17,7 +17,7 @@ MUTANTS = [
     ("green check skipped", "    if code != 0 or s.invalid or s.failed:", "    if False:"),
     ("inject may edit tests", "        if bad:\n            raise KeelError(f\"line {inj.line}: an injected fault", "        if False:\n            raise KeelError(f\"line {inj.line}: an injected fault"),
     ("placeholder lint off", "    if started and PLACEHOLDER in card.text:", "    if False:"),
-    ("done without gate ok", "        if not any(verdict == \"ok\" for _, verdict, _ in card.gates):", "        if False:"),
+    ("done without gate ok", "        if not oks:\n            probs.append(\"a done card needs", "        if False:\n            probs.append(\"a done card needs"),
     ("unchecked criterion ok", "        if not item.checks:", "        if False:"),
     ("freeze change ignored", "            elif new.frozen_text() != old.frozen_text():", "            elif False:"),
     ("assert drop ignored", "        if s[\"assert-\"] > s[\"assert+\"]:", "        if False:"),
@@ -43,6 +43,13 @@ MUTANTS = [
     ("ignored paths flagged", " and not map_path_exists(root, tok) and not git_ignored(root, tok):", " and not map_path_exists(root, tok):"),
     ("ignored check accepts everything", "for p in (path, path + \"/\"))", "for p in (path, path + \"/\")) or True"),
     ("ignored check misses dir patterns", "for p in (path, path + \"/\"))", "for p in (path,))"),
+    ("partial gate recordable", "    if args.only and args.record:", "    if False:"),
+    ("receipt coverage ignored", "        elif required_steps and not any(receipt_covers(r, required_steps) for r in oks):", "        elif False:"),
+    ("receipt needs one step only", "    return all(found.get(s) == \"0\" for s in steps)", "    return any(found.get(s) == \"0\" for s in steps)"),
+    ("receipt ignores exit codes", "    return all(found.get(s) == \"0\" for s in steps)", "    return all(s in found for s in steps)"),
+    ("cargo counts ignored as run", "    return TestSummary(passed + failed, failed, None, sum(int(i) for _, _, i in results))", "    return TestSummary(passed + failed + sum(int(i) for _, _, i in results), failed, None)"),
+    ("cargo counts running N", "    passed = sum(int(p) for p, _, _ in results)\n", "    passed = sum(_ints(r\"^running (\\d+) tests?$\", out)) - sum(int(f) for _, f, _ in results)\n"),
+    ("go counts skipped as run", "    return TestSummary(passed + failed, failed, None, len(re.findall(r\"^\\s*--- SKIP: \", out, re.M)))", "    return TestSummary(len(re.findall(r\"^=== RUN\\s\", out, re.M)), failed, None)"),
 ]
 survived = []
 for name, old, new in MUTANTS:

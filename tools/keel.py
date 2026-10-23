@@ -187,7 +187,7 @@ class Card:
     reds: list[Red]
     red_none: list[tuple[str, int]]
     injects: list[Inject]
-    gates: list[tuple[str, str, int]]
+    gates: list[tuple[str, str, str, int]]  # (rev, verdict, step results, line)
     revised: set[int]
     weaken_ok: list[str]
     errors: list[str]
@@ -294,7 +294,7 @@ def parse_card(text: str, rel: str) -> Card:
             continue
         gm = GATE_LINE.match(line)
         if gm:
-            card.gates.append((gm.group(1), gm.group(2), n))
+            card.gates.append((gm.group(1), gm.group(2), gm.group(3), n))
             continue
         wm = WEAKEN_LINE.match(line)
         if wm:
@@ -336,7 +336,14 @@ def load_card(root: Path, path: str | Path) -> Card:
     return parse_card(p.read_text(encoding="utf-8"), rel)
 
 
-def lint_card(card: Card) -> list[str]:
+def receipt_covers(results: str, steps: list[str]) -> bool:
+    """A receipt proves completion only if every configured step ran and exited
+    0. A partial or hand-trimmed receipt that still says `ok` must not count."""
+    found = dict(re.findall(r"(?:^|\s)([\w.-]+)=(\d+)", results))
+    return all(found.get(s) == "0" for s in steps)
+
+
+def lint_card(card: Card, required_steps: list[str] | None = None) -> list[str]:
     probs = list(card.errors)
     meta = card.meta
     if not meta:
@@ -382,8 +389,12 @@ def lint_card(card: Card) -> list[str]:
     if finished and ctype in BEHAVIOUR_TYPES and not (card.reds or card.injects):
         probs.append(f"a finished `{ctype}` card needs a `RED: <commit> <filter>` line or a keel-inject block")
     if status == "done":
-        if not any(verdict == "ok" for _, verdict, _ in card.gates):
+        oks = [results for _, verdict, results, _ in card.gates if verdict == "ok"]
+        if not oks:
             probs.append("a done card needs a `GATE: <rev> ok …` receipt (python3 tools/keel.py gate --record <card>)")
+        elif required_steps and not any(receipt_covers(r, required_steps) for r in oks):
+            probs.append(f"the GATE receipt does not show every gate step exiting 0 ({', '.join(required_steps)}); "
+                         "a partial gate is not a completion receipt")
         for item in card.items.values():
             for c in item.checks:
                 if c.kind == "author" and not c.confirmed:
@@ -396,9 +407,10 @@ def lint_card(card: Card) -> list[str]:
 
 @dataclass
 class TestSummary:
-    selected: int
+    selected: int        # tests that actually executed (passed + failed); never skipped/ignored ones
     failed: int
     invalid: str | None  # why the output cannot certify anything
+    skipped: int = 0     # reported separately: a skipped test proved nothing
 
 
 def _ints(pattern: str, text: str) -> list[int]:
@@ -410,15 +422,21 @@ def parse_cargo(out: str) -> TestSummary:
     # `error: 1 target failed`; only these lines mean the code did not build.
     if re.search(r"^error\[E\d+\]:|^error: could not compile|^error: linking with", out, re.M):
         return TestSummary(0, 0, "compile error (a compile error is not a behavioural red)")
-    return TestSummary(sum(_ints(r"^running (\d+) tests?$", out)),
-                       sum(_ints(r"^test result: \w+\. \d+ passed; (\d+) failed", out)), None)
+    # Count from `test result:` lines, not `running N`: N includes #[ignore]d
+    # tests, and nested sub-executors print `running N` with no result line.
+    results = re.findall(r"^test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored", out, re.M)
+    passed = sum(int(p) for p, _, _ in results)
+    failed = sum(int(f) for _, f, _ in results)
+    return TestSummary(passed + failed, failed, None, sum(int(i) for _, _, i in results))
 
 
 def parse_go(out: str) -> TestSummary:
     if re.search(r"\[(build|setup) failed\]|^# \S+\n.*\.go:\d+", out, re.M):
         return TestSummary(0, 0, "build failed (a compile error is not a behavioural red)")
-    return TestSummary(len(re.findall(r"^=== RUN\s", out, re.M)),
-                       len(re.findall(r"^\s*--- FAIL: ", out, re.M)), None)
+    # `=== RUN` is printed for skipped tests too; count the verdict lines.
+    passed = len(re.findall(r"^\s*--- PASS: ", out, re.M))
+    failed = len(re.findall(r"^\s*--- FAIL: ", out, re.M))
+    return TestSummary(passed + failed, failed, None, len(re.findall(r"^\s*--- SKIP: ", out, re.M)))
 
 
 def parse_bun(out: str) -> TestSummary:
@@ -717,9 +735,10 @@ def cmd_audit_red(root: Path, cfg: dict, args) -> None:
 def cmd_lint(root: Path, cfg: dict, args) -> None:
     paths = [Path(p) for p in args.cards] if args.cards else card_paths(root, cfg)
     failed = 0
+    steps = [s["name"] for s in cfg["gate"]["step"]]
     for path in paths:
         card = load_card(root, path)
-        probs = lint_card(card)
+        probs = lint_card(card, steps)
         if probs:
             failed += 1
             print(f"FAIL  {card.rel}")
@@ -872,6 +891,8 @@ def cmd_gate(root: Path, cfg: dict, args) -> None:
     steps = cfg["gate"]["step"]
     if not steps:
         raise KeelError("keel.toml has no [[gate.step]]; a gate with nothing in it passes vacuously")
+    if args.only and args.record:
+        raise KeelError("--record needs the full gate: a run restricted with --only is not a completion receipt")
     logs = root / ".keel" / "logs"
     logs.mkdir(parents=True, exist_ok=True)
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -896,7 +917,7 @@ def cmd_gate(root: Path, cfg: dict, args) -> None:
         extra = ""
         if step.get("runner") and code is not None:
             s = summarize(red_config(cfg), step["runner"], log.read_text(encoding="utf-8", errors="replace"))
-            extra = f"[{s.selected - s.failed}p/{s.failed}f]"
+            extra = f"[{s.selected - s.failed}p/{s.failed}f{f'/{s.skipped}skip' if s.skipped else ''}]"
             if s.selected == 0:
                 code, extra = code or 1, "[0 tests: a test step that runs nothing is not green]"
         results.append(f"{name}={code}{extra}")

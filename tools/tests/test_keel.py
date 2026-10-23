@@ -303,8 +303,10 @@ class Lint(RepoCase):
     def test_a_done_fix_without_red_or_gate_receipt_fails(self):
         code, out = self.lint(card_text(status="done"))
         self.assertEqual(code, 1)
-        self.assertIn("RED", out)
-        self.assertIn("GATE", out)
+        self.assertIn("needs a `RED: <commit> <filter>` line", out)
+        # The exact message: "does not show every gate step" also contains
+        # "GATE", and must not be what reports a card with no receipt at all.
+        self.assertIn("needs a `GATE: <rev> ok", out)
 
     def test_red_none_is_refused_on_a_behaviour_card(self):
         code, out = self.lint(card_text(evidence="RED: none — it is obvious\n"))
@@ -320,6 +322,14 @@ class Lint(RepoCase):
         dod2 = "- **D1** the dialog looks right.\n  - 检：author 打开设置看一眼 已确认：2026-10-23\n"
         code, out = self.lint(card_text(status="done", dod=dod2, evidence=ev))
         self.assertEqual(code, 0, out)
+
+    def test_a_done_receipt_must_show_every_gate_step_exiting_zero(self):
+        card = keel.parse_card(card_text(status="done", evidence="RED: abcdef1 x\nGATE: abc ok build=0 (2026-01-01)\n"), "docs/tasks/fix-add.md")
+        self.assertTrue(any("every gate step" in p for p in keel.lint_card(card, ["build", "test"])))
+        card = keel.parse_card(card_text(status="done", evidence="RED: abcdef1 x\nGATE: abc ok build=0 test=1 (2026-01-01)\n"), "docs/tasks/fix-add.md")
+        self.assertTrue(any("every gate step" in p for p in keel.lint_card(card, ["build", "test"])))
+        card = keel.parse_card(card_text(status="done", evidence="RED: abcdef1 x\nGATE: abc+dirty ok build=0 test=0[812p/0f] web-paint=0 (2026-01-01)\n"), "docs/tasks/fix-add.md")
+        self.assertEqual(keel.lint_card(card, ["web-paint", "build", "test"]), [])
 
     def test_file_name_must_match_the_type(self):
         code, out = self.lint(card_text(), name="feat-add.md")
@@ -542,6 +552,14 @@ class Gate(RepoCase):
         text = (self.r.root / "docs/tasks/fix-add.md").read_text()
         self.assertRegex(text, r"## 证据\n\nGATE: [0-9a-f]{12}\+dirty ok unit=0")
 
+    def test_a_partial_gate_cannot_be_recorded_as_a_receipt(self):
+        self.r.write("calc.py", FIXED)
+        self.r.write("test_calc.py", TEST)
+        self.r.commit()
+        self.r.write("docs/tasks/fix-add.md", card_text())
+        self.assertKeelFails(["gate", "--only", "unit", "--record", "docs/tasks/fix-add.md"], "not a completion receipt")
+        self.assertNotIn("GATE:", (self.r.root / "docs/tasks/fix-add.md").read_text())
+
     def test_a_red_gate_fails_and_says_so_in_the_receipt(self):
         self.r.write("calc.py", BUGGY)
         self.r.write("test_calc.py", TEST)
@@ -688,6 +706,25 @@ class Runners(unittest.TestCase):
         s = keel.parse_cargo(out)
         self.assertEqual((s.selected, s.failed, s.invalid), (1, 1, None))
         self.assertIsNotNone(keel.parse_cargo("error: could not compile `core` (lib test) due to 1 previous error\n").invalid)
+
+    def test_cargo_counts_only_tests_that_ran_never_ignored_or_resultless_sub_executors(self):
+        out = ("running 3 tests\ntest a ... ok\ntest b ... ignored\ntest c ... ok\n"
+               "test result: ok. 2 passed; 0 failed; 1 ignored; 0 measured; 0 filtered out\n"
+               "running 4 tests\n"  # a nested sub-executor: running N, then no result line
+               "running 1 test\ntest d ... FAILED\n"
+               "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n")
+        s = keel.parse_cargo(out)
+        self.assertEqual((s.selected, s.failed, s.skipped), (3, 1, 1))
+
+    def test_a_cargo_filter_that_only_hits_ignored_tests_selects_nothing(self):
+        s = keel.parse_cargo("running 1 test\ntest a ... ignored\n"
+                             "test result: ok. 0 passed; 0 failed; 1 ignored; 0 measured; 9 filtered out\n")
+        self.assertEqual((s.selected, s.skipped), (0, 1))
+
+    def test_go_skipped_tests_are_not_counted_as_run(self):
+        s = keel.parse_go("=== RUN   TestA\n--- PASS: TestA (0.00s)\n=== RUN   TestB\n--- SKIP: TestB (0.00s)\n"
+                          "=== RUN   TestC\n    --- FAIL: TestC/sub (0.00s)\n")
+        self.assertEqual((s.selected, s.failed, s.skipped), (2, 1, 1))
 
     def test_go_build_failures_are_not_red(self):
         self.assertIsNotNone(keel.parse_go("FAIL\tex/pkg [build failed]\n").invalid)
