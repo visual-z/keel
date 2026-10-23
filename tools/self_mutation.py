@@ -37,6 +37,12 @@ MUTANTS = [
     ("decisions unscoped", "        body = section_text(plan.read_text(encoding=\"utf-8\"), d[\"decisions_heading\"])", "        body = plan.read_text(encoding=\"utf-8\")"),
     ("absolute link allowed", "            if path.startswith(\"/\"):", "            if False:"),
     ("inline code linked", "        prose = re.sub(r\"`[^`\\n]*`\", \"\", re.sub(", "        prose = (lambda x: x)(re.sub("),
+    ("zero-context patch refused", "\"apply\", \"--unidiff-zero\", ", "\"apply\", "),
+    ("cargo test failure read as compile error", "    if re.search(r\"^error\\[E\\d+\\]:|^error: could not compile|^error: linking with\", out, re.M):", "    if re.search(r\"^error(\\[E\\d+\\])?:|could not compile\", out, re.M):"),
+    ("green shares the fault cache", "    isolated = tree.resolve() != root.resolve()", "    isolated = True"),
+    ("ignored paths flagged", " and not map_path_exists(root, tok) and not git_ignored(root, tok):", " and not map_path_exists(root, tok):"),
+    ("ignored check accepts everything", "for p in (path, path + \"/\"))", "for p in (path, path + \"/\")) or True"),
+    ("ignored check misses dir patterns", "for p in (path, path + \"/\"))", "for p in (path,))"),
 ]
 survived = []
 for name, old, new in MUTANTS:

@@ -406,7 +406,9 @@ def _ints(pattern: str, text: str) -> list[int]:
 
 
 def parse_cargo(out: str) -> TestSummary:
-    if re.search(r"^error(\[E\d+\])?:|could not compile", out, re.M):
+    # A failing test run also prints `error: test failed, to rerun …` and
+    # `error: 1 target failed`; only these lines mean the code did not build.
+    if re.search(r"^error\[E\d+\]:|^error: could not compile|^error: linking with", out, re.M):
         return TestSummary(0, 0, "compile error (a compile error is not a behavioural red)")
     return TestSummary(sum(_ints(r"^running (\d+) tests?$", out)),
                        sum(_ints(r"^test result: \w+\. \d+ passed; (\d+) failed", out)), None)
@@ -500,14 +502,19 @@ def summarize(red: dict, runner: str, out: str) -> TestSummary:
     raise KeelError(f"unknown runner `{runner}`: set red.runner, or red.selected_re/failed_re for `custom`")
 
 
-def test_env(root: Path, red: dict) -> dict:
-    cache = root / ".keel" / "cache"
-    cache.mkdir(parents=True, exist_ok=True)
+def test_env(root: Path, red: dict, *, isolated: bool) -> dict:
+    """`isolated` runs happen in throwaway worktrees and may use red.env (e.g. a
+    private build cache). The working tree never does: a cache shared with a
+    fault-injected checkout can hand it the faulty build, because build tools
+    compare mtimes and a fresh checkout's sources look older than the cache."""
     env = dict(os.environ)
     # Coloured summaries break the count parsers and turn a real red into "matched 0".
     env.update({"NO_COLOR": "1", "FORCE_COLOR": "0", "CARGO_TERM_COLOR": "never", "CI": env.get("CI", "1")})
-    for k, v in red.get("env", {}).items():
-        env[k] = str(v).replace("{cache}", str(cache))
+    if isolated:
+        cache = root / ".keel" / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
+        for k, v in red.get("env", {}).items():
+            env[k] = str(v).replace("{cache}", str(cache))
     return env
 
 
@@ -532,8 +539,9 @@ def build_command(template: list[str], filt: str) -> list[str]:
 def run_filter(root: Path, red: dict, tree: Path, filt: str) -> tuple[int | None, TestSummary, str]:
     cmd = build_command(red["command"], filt)
     cwd = tree / red.get("cwd", ".")
+    isolated = tree.resolve() != root.resolve()
     try:
-        p = run(cmd, cwd, env=test_env(root, red), timeout=float(red.get("timeout_s", 1800)))
+        p = run(cmd, cwd, env=test_env(root, red, isolated=isolated), timeout=float(red.get("timeout_s", 1800)))
     except subprocess.TimeoutExpired:
         return None, TestSummary(0, 0, "timed out"), ""
     except FileNotFoundError:
@@ -667,7 +675,8 @@ def cmd_verify_red(root: Path, cfg: dict, args) -> None:
         rc = red_config(cfg, inj.profile)
         print(f"INJECT  {base[:12]}+patch  {inj.filter}  ({', '.join(touched)})")
         with Worktree(root, rc, base) as wt:
-            p = git(wt, "apply", "--whitespace=nowarn", "-", input=inj.patch)
+            # --unidiff-zero: a one-line fault is naturally written without context lines
+            p = git(wt, "apply", "--unidiff-zero", "--whitespace=nowarn", "-", input=inj.patch)
             if p.returncode != 0:
                 raise KeelError(f"line {inj.line}: the fault patch does not apply to {base[:12]}: {p.stderr.strip()}")
             code, s, out = run_filter(root, rc, wt, inj.filter)
@@ -877,7 +886,8 @@ def cmd_gate(root: Path, cfg: dict, args) -> None:
         try:
             with log.open("w", encoding="utf-8") as fh:
                 code = subprocess.run(cmd, cwd=root / step.get("cwd", "."), stdout=fh, stderr=subprocess.STDOUT,
-                                      env=test_env(root, red_config(cfg)), timeout=step.get("timeout_s")).returncode
+                                      env=test_env(root, red_config(cfg), isolated=False),
+                                      timeout=step.get("timeout_s")).returncode
         except FileNotFoundError:
             code = 127
         except subprocess.TimeoutExpired:
@@ -943,6 +953,15 @@ def map_path_exists(root: Path, tok: str) -> bool:
     return False
 
 
+def git_ignored(root: Path, path: str) -> bool:
+    """Build outputs (dist/, node_modules/) are legitimately named by maps but
+    absent from a fresh checkout; an ignored path is not a stale one."""
+    # `dist/` patterns only match directories, and an absent path is not known
+    # to be one, so ask for the path both as a file and as a directory.
+    path = path.rstrip("/")
+    return any(git(root, "check-ignore", "-q", "--no-index", "--", p).returncode == 0 for p in (path, path + "/"))
+
+
 def section_text(text: str, heading: str) -> str | None:
     """The body under the first heading containing `heading`, up to the next
     heading of the same or a higher level."""
@@ -996,7 +1015,7 @@ def cmd_check_docs(root: Path, cfg: dict, args) -> None:
             for tok in BACKTICK.findall(re.sub(r"```.*?```", "", text, flags=re.S)):
                 if "/" not in tok or re.search(r"[<>⟨⟩*{}$:|]", tok.replace("::", "")) or tok.startswith(("http", "-", ".")):
                     continue
-                if tok.split("/")[0] in top and not map_path_exists(root, tok):
+                if tok.split("/")[0] in top and not map_path_exists(root, tok) and not git_ignored(root, tok):
                     probs.append(f"{rel}: `{tok}` does not exist (stale path in a map file)")
     playbook = doc("playbook")
     if playbook.exists():

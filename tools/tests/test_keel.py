@@ -203,6 +203,35 @@ class VerifyRed(RepoCase):
         self.assertIn("injected fault", out)
         self.assertEqual(self.r.git("status", "--porcelain", "--", "calc.py"), "")
 
+    def test_a_fault_patch_without_context_lines_applies(self):
+        # Mid-file on purpose: git tolerates a context-free hunk at end of file
+        # even without --unidiff-zero, so only a mid-file line tells them apart.
+        self.r.write("calc.py", FIXED + "\n\ndef unused():\n    return 0\n")
+        self.r.write("test_calc.py", TEST)
+        self.r.commit()
+        patch = "--- a/calc.py\n+++ b/calc.py\n@@ -2,1 +2,1 @@\n-    return a + b\n+    return a - b\n"
+        self.r.write("docs/tasks/fix-add.md", card_text(evidence=f"```diff keel-inject test_adds\n{patch}```\n"))
+        self.assertKeelPasses(["verify-red", "docs/tasks/fix-add.md"])
+
+    def test_the_private_cache_env_reaches_throwaway_worktrees_but_never_the_working_tree(self):
+        red = {"env": {"BUILD_DIR": "{cache}/target"}}
+        isolated = keel.test_env(self.r.root, red, isolated=True)
+        self.assertEqual(isolated["BUILD_DIR"], str(self.r.root / ".keel" / "cache" / "target"))
+        self.assertNotIn("BUILD_DIR", keel.test_env(self.r.root, red, isolated=False))
+
+    def test_green_runs_against_the_fixed_code_even_after_a_fault_was_built_in_a_shared_cache(self):
+        # A "build cache" the test reads: if green inherited the worktree's
+        # environment, it would see the faulty build recorded there.
+        self.r.write("calc.py", FIXED)
+        self.r.write("test_calc.py", TEST.replace("from calc import add",
+            "import os\nif os.environ.get('FAULTY_CACHE'):\n    def add(a, b): return a - b\nelse:\n    from calc import add"))
+        self.r.commit()
+        toml = KEEL_TOML.replace("timeout_s = 120", 'timeout_s = 120\nenv = { FAULTY_CACHE = "{cache}" }')
+        self.r.write("keel.toml", toml)
+        patch = "--- a/calc.py\n+++ b/calc.py\n@@ -2,1 +2,1 @@\n-    return a + b\n+    return a - b\n"
+        self.r.write("docs/tasks/fix-add.md", card_text(evidence=f"```diff keel-inject test_adds\n{patch}```\n"))
+        self.assertKeelPasses(["verify-red", "docs/tasks/fix-add.md"])
+
     def test_an_injected_fault_the_tests_cannot_see_is_reported(self):
         self.r.write("calc.py", FIXED)
         self.r.write("test_calc.py", TEST)
@@ -564,6 +593,16 @@ class Docs(RepoCase):
         self.r.commit()
         self.assertKeelPasses(["check-docs"])
 
+    def test_an_ignored_build_output_named_in_the_map_is_not_stale(self):
+        self.r.write(".gitignore", ".keel/\n__pycache__/\nweb/dist/\n")
+        self.r.write("AGENTS.md", "the panel builds into `web/dist`; old notes live in `web/gone`\n")
+        self.r.write("web/index.ts", "\n")
+        self.r.commit()
+        code, out = self.r.keel("check-docs")
+        self.assertEqual(code, 1, out)
+        self.assertIn("web/gone", out)
+        self.assertNotIn("web/dist", out)
+
     def test_absolute_links_are_reported_and_excluded_paths_are_skipped(self):
         self.r.write("AGENTS.md", "x\n")
         self.r.write("docs/a.md", "[log](/home/someone/build.log)\n")
@@ -639,6 +678,16 @@ class Runners(unittest.TestCase):
                "running 3 tests\ntest result: ok. 3 passed; 0 failed; 0 ignored\n")
         s = keel.parse_cargo(out)
         self.assertEqual((s.selected, s.failed, s.invalid), (5, 1, None))
+
+    def test_a_real_cargo_test_failure_is_red_not_a_compile_error(self):
+        # Verbatim shape of cargo 1.9x output when one unit test fails.
+        out = ("     Running unittests src/lib.rs (target/debug/deps/core-1)\n\nrunning 1 test\n"
+               "test damage::tests::coalesces ... FAILED\n\nfailures:\n    damage::tests::coalesces\n\n"
+               "test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 226 filtered out; finished in 0.00s\n\n"
+               "error: test failed, to rerun pass `-p core --lib`\nerror: 1 target failed:\n    `-p core --lib`\n")
+        s = keel.parse_cargo(out)
+        self.assertEqual((s.selected, s.failed, s.invalid), (1, 1, None))
+        self.assertIsNotNone(keel.parse_cargo("error: could not compile `core` (lib test) due to 1 previous error\n").invalid)
 
     def test_go_build_failures_are_not_red(self):
         self.assertIsNotNone(keel.parse_go("FAIL\tex/pkg [build failed]\n").invalid)

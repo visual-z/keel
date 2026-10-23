@@ -5,7 +5,7 @@ stack = "bun"
 
 [[gate.step]]
 name = "typecheck"
-cmd = ["bunx", "tsc", "--noEmit"]
+cmd = ["node_modules/.bin/tsc", "--noEmit"]
 
 [[gate.step]]
 name = "test"
@@ -43,6 +43,8 @@ glossary_source_dirs = []  # 填源码目录后，CONTEXT.md「避免」列的�
 # forbid = ["⟨禁用的 import 正则⟩"]
 
 [red]
+# 直接调用 node_modules/.bin 下锁定版本的工具：npx / bunx / pnpm exec 在缺依赖时会静默临时安装
+# 另一个版本，那样得到的红绿不是本项目测试工具的结论。缺依赖就让它失败（先装依赖）。
 runner = "bun"
 command = ["bun", "test", "-t", "{filter}"]
 link = ["node_modules"]   # 临时 worktree 没有依赖；缺依赖时加载失败会被误读成红
