@@ -52,9 +52,9 @@ For an existing project, run `keel adopt --stack <preset>`. It adds only the mis
 | Command | The claim it verifies |
 |---|---|
 | `verify-red <card>` | *"This test was red before the fix."* keel re-runs the test in a throwaway worktree at the RED commit, where it must fail, and then in the working tree, where it must pass. With `repeat = N` every run must agree. Compile errors, load errors, skipped or zero selected tests, timeouts, crashes, and exit codes that disagree with the report do not count as red. |
-| `verify-red` (fault patch) | *"The tests really catch this bug."* keel applies the card's `keel-inject` patch to HEAD and requires the tests to go red. The patch may touch product code only, never tests. |
+| `verify-red` (fault patch) | *"The tests really catch this bug."* keel applies the card's `keel-inject` patch to HEAD and requires the tests to go red. The patch may touch product code only, never tests. A patch written before a file moved is applied where the file is now. |
 | `freeze-check` | *"The definition of done was not relaxed."* keel compares the card with the commit that opened it. Criteria may only be added; changing one needs an author-confirmed revision. |
-| `assert-guard` | *"No test was weakened."* keel scans the diff for removed assertions, new skip/only markers, early exits and `__eq__` overrides in tests, and deleted test files. |
+| `assert-guard` | *"No test was weakened."* keel scans the diff for removed assertions, new skip/only markers, early exits and `__eq__` overrides in tests, and deleted test files. A moved test is compared with its old content, so a layout change is clean; moving a test out of the test paths counts as deleting it. |
 | `gate --record <card>` | *"Every check passed."* keel reads each step's exit code directly and counts the tests that actually ran (zero ran means failure). It writes a one-line receipt into the card; a partial run cannot be recorded. |
 | `audit-red` | Every claim, in legacy cards too, names a commit that is retained under `refs/keel/red/`. |
 | `lint`, `check-docs`, `check-boundaries` | Card structure and evidence; doc budgets, links, stale map paths, decision numbering, registries, glossary; regex architecture boundaries. |

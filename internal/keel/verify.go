@@ -26,6 +26,43 @@ func PatchPaths(patch string) []string {
 	return out
 }
 
+// RenamesUpTo maps every path ever renamed in the history of rev to where it
+// lives at rev, following chains (a → b → c gives a → c and b → c).
+func RenamesUpTo(root, rev string) map[string]string {
+	out, _ := Git(root, "-c", "core.quotePath=false", "log", "--find-renames", "--diff-filter=R", "--name-status", "--format=", "--reverse", rev)
+	where := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 3 || !strings.HasPrefix(f[0], "R") {
+			continue
+		}
+		for k, v := range where {
+			if v == f[1] {
+				where[k] = f[2]
+			}
+		}
+		where[f[1]] = f[2]
+	}
+	return where
+}
+
+// renamePatchPath points a unified diff's headers for one file at its new path.
+func renamePatchPath(patch, from, to string) string {
+	var b strings.Builder
+	for _, line := range strings.SplitAfter(patch, "\n") {
+		switch {
+		case line == "--- a/"+from+"\n" || line == "--- a/"+from:
+			line = strings.Replace(line, from, to, 1)
+		case line == "+++ b/"+from+"\n" || line == "+++ b/"+from:
+			line = strings.Replace(line, from, to, 1)
+		case strings.HasPrefix(line, "diff --git a/"+from+" b/"+from):
+			line = strings.Replace(strings.Replace(line, "a/"+from, "a/"+to, 1), "b/"+from, "b/"+to, 1)
+		}
+		b.WriteString(line)
+	}
+	return b.String()
+}
+
 type verifyOpts struct {
 	at      string
 	noGreen bool
@@ -99,10 +136,27 @@ func VerifyRed(root string, cfg *Config, cardPath string, o verifyOpts, w io.Wri
 		if !ok {
 			return failf("cannot resolve %s", at)
 		}
+		var renames map[string]string
 		for _, inj := range card.Injects {
 			touched := PatchPaths(inj.Patch)
 			if len(touched) == 0 {
 				return failf("line %d: keel-inject block is not a unified diff", inj.Line)
+			}
+			// A fault written before a move names the file where it was. It is
+			// applied where that file is now, and checked against tests there.
+			var moved []string
+			for i, p := range touched {
+				if _, exists := Git(root, "cat-file", "-e", base+":"+p); exists {
+					continue
+				}
+				if renames == nil {
+					renames = RenamesUpTo(root, base)
+				}
+				if to, ok := renames[p]; ok {
+					inj.Patch = renamePatchPath(inj.Patch, p, to)
+					touched[i] = to
+					moved = append(moved, to+", renamed from "+p)
+				}
 			}
 			var bad []string
 			for _, p := range touched {
@@ -117,7 +171,11 @@ func VerifyRed(root string, cfg *Config, cardPath string, o verifyOpts, w io.Wri
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(w, "INJECT  %s+patch  %s  (%s)\n", base[:12], inj.Filter, strings.Join(touched, ", "))
+			shown := touched
+			if len(moved) > 0 {
+				shown = moved
+			}
+			fmt.Fprintf(w, "INJECT  %s+patch  %s  (%s)\n", base[:12], inj.Filter, strings.Join(shown, ", "))
 			var last RunOutcome
 			for n := 0; n < repeats(red); n++ {
 				wt, err := NewWorktree(root, base, red.Link)

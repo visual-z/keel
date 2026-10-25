@@ -1,0 +1,86 @@
+# A moved test is compared with its own old content: moving a tree of tests
+# (a monorepo layout change) reports nothing, while a weakening inside a moved
+# file, a test moved out of the test paths, or a file moved into them with its
+# early exit still count. A fault patch written before a move applies to the
+# moved file, and still may not edit tests.
+repo
+exec sh -c 'printf "%s\n" "check adds_two 4" "check echoes_value \"\$value\"" "[ -n \"\$QUICK\" ] && exit 0" > tests/cases.sh'
+mkdir helpers
+exec sh -c 'printf "%s\n" "check helper_value 4" "exit 0" > helpers/early.sh'
+commit 'an early exit that predates the branch'
+exec git checkout -q -b work
+
+# A pure move: the early exit was already there, so nothing was added.
+mkdir tests/unit
+exec git mv tests/cases.sh tests/unit/cases.sh
+exec keel assert-guard
+stdout '0 problem'
+
+# Moved and weakened in the same diff: charged to the new path.
+exec sh -c 'grep -v adds_two tests/unit/cases.sh > t && mv t tests/unit/cases.sh'
+! exec keel assert-guard
+stderr 'tests/unit/cases.sh: assertions dropped \(1 removed, 0 added\)'
+exec git checkout -q -- tests/unit/cases.sh
+
+# Moved out of the test paths: as good as deleted.
+mkdir attic
+exec git mv tests/unit/cases.sh attic/cases.sh
+! exec keel assert-guard
+stderr 'tests/cases.sh: test file moved out of the test paths to attic/cases.sh'
+exec git mv attic/cases.sh tests/unit/cases.sh
+
+# Moved into the test paths: every line is new to them, the early exit too.
+exec git mv helpers/early.sh tests/early.sh
+! exec keel assert-guard
+stderr 'tests/early.sh: 1 early-exit or always-equal pattern\(s\) added'
+exec git mv tests/early.sh helpers/early.sh
+
+# A fault patch names calc.txt; the product file has since moved to lib/.
+mkdir lib
+exec git mv calc.txt lib/calc.txt
+exec sh -c 'sed -e "s#calc.txt#lib/calc.txt#" -e "s#tests/cases.sh#tests/unit/cases.sh#" tests/run.sh > t && mv t tests/run.sh'
+commit 'move the product file'
+cp card.md docs/tasks/fix-a.md
+exec keel verify-red docs/tasks/fix-a.md
+stdout 'INJECT .*\(lib/calc.txt, renamed from calc.txt\)'
+stdout '1 injected fault\(s\) verified'
+exec git status --porcelain lib/calc.txt
+! stdout .
+
+# The rename does not open a door to faults in tests.
+cp card-test.md docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'must break product code, not tests: tests/unit/cases.sh'
+
+# The test-path check uses where the file is now: a helper that has since
+# moved into the tests is a test.
+exec git mv helpers/early.sh tests/early.sh
+commit 'adopt the helper as a test'
+cp card-helper.md docs/tasks/fix-a.md
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'must break product code, not tests: tests/early.sh'
+
+-- card.md --
+```diff keel-inject adds_two
+--- a/calc.txt
++++ b/calc.txt
+@@ -2,1 +2,1 @@
+-4
++5
+```
+-- card-test.md --
+```diff keel-inject adds_two
+--- a/tests/cases.sh
++++ b/tests/cases.sh
+@@ -1,1 +1,1 @@
+-check adds_two 4
++check adds_two 5
+```
+-- card-helper.md --
+```diff keel-inject adds_two
+--- a/helpers/early.sh
++++ b/helpers/early.sh
+@@ -1,1 +1,1 @@
+-check helper_value 4
++check helper_value 5
+```

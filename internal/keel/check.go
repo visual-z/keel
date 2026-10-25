@@ -213,35 +213,25 @@ func AssertGuard(root string, cfg *Config, base string, w io.Writer) error {
 			}
 		}
 	}
-	r, err := Run(root, nil, 0, "", "git", "diff", "--no-color", "--unified=0", "--no-renames", mb, "--")
+	// Renames are detected so a moved test is compared with its own old
+	// content: moving a tree of tests (a repository becoming a monorepo) adds
+	// nothing, and a weakening inside a moved file is still charged to it.
+	// A move across the edge of the test paths is not a move for the guard:
+	// out of them it hides a test as surely as deleting it, and into them
+	// every line is new to the guard, its early exits too.
+	r, err := Run(root, nil, 0, "", "git", "-c", "core.quotePath=false", "diff", "--no-color", "--unified=0", "--find-renames", mb, "--")
 	if err != nil {
 		return err
 	}
 	stats := map[string]*guardStats{}
-	current, inHeader := "", false
-	for _, line := range lines(r.Stdout) {
-		// File headers only occur between `diff --git` and the first `@@`; a
-		// removed line whose content starts with `--` is not one.
-		if strings.HasPrefix(line, "diff --git ") {
-			current, inHeader = "", true
-			continue
+	count := func(file, line string) {
+		if file == "" || line == "" || (line[0] != '+' && line[0] != '-') || !GlobMatch(file, scope) {
+			return
 		}
-		if inHeader {
-			switch {
-			case strings.HasPrefix(line, "--- a/"), strings.HasPrefix(line, "+++ b/"):
-				current = line[6:]
-			case strings.HasPrefix(line, "@@"):
-				inHeader = false
-			}
-			continue
-		}
-		if strings.HasPrefix(line, "@@") || current == "" || line == "" || (line[0] != '+' && line[0] != '-') || !GlobMatch(current, scope) {
-			continue
-		}
-		s := stats[current]
+		s := stats[file]
 		if s == nil {
 			s = &guardStats{}
-			stats[current] = s
+			stats[file] = s
 		}
 		body := line[1:]
 		if anyMatch(asserts, body) {
@@ -258,11 +248,59 @@ func AssertGuard(root string, cfg *Config, base string, w io.Writer) error {
 			s.suspAdd++
 		}
 	}
-	deleted, _ := Git(root, "diff", "--name-only", "--diff-filter=D", mb, "--")
+	type move struct{ from, to string }
+	var moves []move
+	current, renameFrom, inHeader := "", "", false
+	for _, line := range lines(r.Stdout) {
+		// File headers only occur between `diff --git` and the first `@@`; a
+		// removed line whose content starts with `--` is not one.
+		if strings.HasPrefix(line, "diff --git ") {
+			current, renameFrom, inHeader = "", "", true
+			continue
+		}
+		if inHeader {
+			switch {
+			case strings.HasPrefix(line, "rename from "):
+				renameFrom = strings.TrimPrefix(line, "rename from ")
+			case strings.HasPrefix(line, "rename to "):
+				moves = append(moves, move{renameFrom, strings.TrimPrefix(line, "rename to ")})
+			case strings.HasPrefix(line, "--- a/"), strings.HasPrefix(line, "+++ b/"):
+				current = line[6:]
+			case strings.HasPrefix(line, "@@"):
+				inHeader = false
+			}
+			continue
+		}
+		if strings.HasPrefix(line, "@@") {
+			continue
+		}
+		// A move across the edge is judged below, from the whole file.
+		if n := len(moves); n > 0 && moves[n-1].to == current && GlobMatch(moves[n-1].from, scope) != GlobMatch(current, scope) {
+			continue
+		}
+		count(current, line)
+	}
+	deleted, _ := Git(root, "-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=D", "--find-renames", mb, "--")
 	var probs []string
 	for _, f := range strings.Fields(deleted) {
 		if GlobMatch(f, t.Paths) && !allowed[f] {
 			probs = append(probs, f+": test file deleted")
+		}
+	}
+	for _, m := range moves {
+		switch inFrom, inTo := GlobMatch(m.from, scope), GlobMatch(m.to, scope); {
+		case inFrom && !inTo && GlobMatch(m.from, t.Paths) && !allowed[m.from]:
+			probs = append(probs, fmt.Sprintf("%s: test file moved out of the test paths to %s", m.from, m.to))
+		case !inFrom && inTo:
+			whole, err := Run(root, nil, 0, "", "git", "diff", "--no-color", "--unified=0", "--no-renames", mb, "--", m.to)
+			if err != nil {
+				return err
+			}
+			for _, line := range lines(whole.Stdout) {
+				if !strings.HasPrefix(line, "+++ ") && !strings.HasPrefix(line, "--- ") {
+					count(m.to, line)
+				}
+			}
 		}
 	}
 	files := make([]string, 0, len(stats))
