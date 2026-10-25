@@ -30,13 +30,13 @@ keel 把每张任务卡当作一个**待证明的命题**：完成定义是规�
 ## 安装
 
 ```bash
-mise use github:visual-z/keel@1.0.2                 # 推荐：版本写进 mise.toml
-go install github.com/visual-z/keel/cmd/keel@v1.0.2 # 有 Go 工具链时
+mise use github:visual-z/keel@1.1.0                 # 推荐：版本写进 mise.toml
+go install github.com/visual-z/keel/cmd/keel@v1.1.0 # 有 Go 工具链时
 ```
 
 也可以从 [Releases](https://github.com/visual-z/keel/releases) 下载对应平台的压缩包，并用 `checksums.txt` 核对。
 
-每个仓库都在 `keel.toml` 里钉住所用的版本（`[keel] version = "1.0.2"`）。PATH 上的其他版本会切换到这个版本运行，做法同 `GOTOOLCHAIN=auto` 与 bazelisk：从 Release 安装，核对 `checksums.txt`，然后运行。结论不会取决于 PATH 上碰巧是哪个 keel。`KEEL_TOOLCHAIN=local` 表示不下载。
+每个仓库都在 `keel.toml` 里钉住所用的版本（`[keel] version = "1.1.0"`）。PATH 上的其他版本会切换到这个版本运行，做法同 `GOTOOLCHAIN=auto` 与 bazelisk：从 Release 安装，核对 `checksums.txt`，然后运行。结论不会取决于 PATH 上碰巧是哪个 keel。`KEEL_TOOLCHAIN=local` 表示不下载。
 
 ## 开始一个项目
 
@@ -97,7 +97,7 @@ keel.toml            keel 用自己检查自己的仓库
 go test -race ./...           # 单元测试 + 场景仓库
 go run ./internal/selfmut     # 每一项检查，被删掉时都必须有测试发现
 keel gate                     # 本仓库自己的 gate
-scripts/release.sh 1.0.2 --publish
+scripts/release.sh 1.1.0 --publish
 ```
 
 新增或修改检查时，要同时加一个「抓到违规」的场景和一个「干净输入能通过」的场景，再在 `internal/selfmut` 里加一个对应的变异体。

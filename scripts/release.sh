@@ -14,8 +14,12 @@ cd "$(dirname "$0")/.."
 
 test -z "$(git status --porcelain)" || { echo "working tree is dirty" >&2; exit 1; }
 grep -q "^version = \"$version\"" keel.toml || { echo "keel.toml does not pin $version" >&2; exit 1; }
-# Gate with the code being released: the release it pins does not exist yet.
-go run ./cmd/keel gate
+# Gate with the code being released, steps that call keel included: the
+# release keel.toml pins does not exist yet.
+bindir="$(mktemp -d)"
+trap 'rm -rf "$bindir"' EXIT
+go build -o "$bindir/keel" ./cmd/keel
+PATH="$bindir:$PATH" keel gate
 
 out="dist/$version"
 rm -rf "$out" && mkdir -p "$out"

@@ -29,13 +29,13 @@ That layer does not depend on the project's language, so keel is written once, i
 ## Install
 
 ```bash
-mise use github:visual-z/keel@1.0.2                 # recommended: pins it in mise.toml
-go install github.com/visual-z/keel/cmd/keel@v1.0.2 # with a Go toolchain
+mise use github:visual-z/keel@1.1.0                 # recommended: pins it in mise.toml
+go install github.com/visual-z/keel/cmd/keel@v1.1.0 # with a Go toolchain
 ```
 
 You can also download an archive from [Releases](https://github.com/visual-z/keel/releases) and verify it against `checksums.txt`.
 
-Every repository pins the release it is checked with in `keel.toml` (`[keel] version = "1.0.2"`). Any other keel on `PATH` switches to that release, the way `GOTOOLCHAIN=auto` and bazelisk do: it installs it from the release, checked against `checksums.txt`, and runs it. A result never depends on which keel happens to be on `PATH`. `KEEL_TOOLCHAIN=local` never downloads.
+Every repository pins the release it is checked with in `keel.toml` (`[keel] version = "1.1.0"`). Any other keel on `PATH` switches to that release, the way `GOTOOLCHAIN=auto` and bazelisk do: it installs it from the release, checked against `checksums.txt`, and runs it. A result never depends on which keel happens to be on `PATH`. `KEEL_TOOLCHAIN=local` never downloads.
 
 ## Start a project
 
@@ -96,7 +96,7 @@ keel.toml            keel checks its own repository
 go test -race ./...           # unit tests + scenario repositories
 go run ./internal/selfmut     # every check must have a test that catches its removal
 keel gate                     # the repository's own gate
-scripts/release.sh 1.0.2 --publish
+scripts/release.sh 1.1.0 --publish
 ```
 
 When you add or change a check, add a scenario that catches the violation and one that passes clean input. Then add a mutant to `internal/selfmut`.

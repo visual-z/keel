@@ -10,7 +10,7 @@
 
 ```toml
 [keel]
-version = "1.0.2"
+version = "1.1.0"
 ```
 
 - `KEEL_TOOLCHAIN=local`：只用本机已安装的版本，不下载；版本不符时直接拒绝运行。
@@ -20,7 +20,7 @@ version = "1.0.2"
 
 ```bash
 mise install                                             # 推荐：mise.toml 里已写好 "github:visual-z/keel"
-go install github.com/visual-z/keel/cmd/keel@v1.0.2      # 有 Go 工具链时
+go install github.com/visual-z/keel/cmd/keel@v1.1.0      # 有 Go 工具链时
 # 或从 GitHub Release 下载对应平台的二进制，核对 checksums.txt
 ```
 
@@ -135,7 +135,7 @@ JUnit 报告里的 `<error>`（setup、collection 出错）、重复的 testcase
 
 ```toml
 [keel]
-version = "1.0.2"             # 必填：钉住的 keel 版本
+version = "1.1.0"             # 必填：钉住的 keel 版本
 
 [gate]
 unbound = ["**/*.md"]         # 回执不绑定的路径（默认：测试路径以外的 markdown）

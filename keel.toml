@@ -1,7 +1,7 @@
 # keel checks its own repository with keel (dogfooding). This file is for the
 # keel repository only; new projects get template/presets/<stack>.toml.
 [keel]
-version = "1.0.2"
+version = "1.1.0"
 
 [project]
 name = "keel"
