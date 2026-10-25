@@ -1,0 +1,42 @@
+# A RED snapshot runs with dependencies linked from the working tree. When a
+# configured lockfile differs between the snapshot and the working tree,
+# those dependencies were installed for other code: keel says so, and with
+# red.prepare installs the snapshot's own instead of linking.
+repo
+exec sh -c 'echo v1 > deps.lock && mkdir -p deps && echo v1 > deps/installed'
+exec sh -c 'printf "deps/\n" >> .gitignore'
+exec sh -c 'sed "s/^timeout_s = 60$/timeout_s = 60\nlink = [\"deps\"]\nlockfiles = [\"deps.lock\"]/" keel.toml > t && mv t keel.toml'
+setvalue 3
+commit 'test: pin add while it is wrong' RED
+setvalue 4
+exec sh -c 'echo v2 > deps.lock && echo v2 > deps/installed'
+commit 'fix: add adds, and upgrade deps'
+expand card.tmpl docs/tasks/fix-a.md
+
+exec keel verify-red docs/tasks/fix-a.md
+stdout 'note: deps.lock differ from the working tree'
+
+# With prepare, the snapshot installs its own dependencies.
+exec sh -c 'sed "s/^lockfiles = \[\"deps.lock\"\]$/&\nprepare = [\"sh\", \"-c\", \"mkdir -p deps \&\& cp deps.lock deps\/installed\"]/" keel.toml > t && mv t keel.toml'
+grep '^prepare' keel.toml
+exec keel verify-red docs/tasks/fix-a.md
+stdout 'dependencies installed for this commit'
+
+# A failing install is not a red.
+exec sh -c 'sed "s/^prepare = .*/prepare = [\"false\"]/" keel.toml > t && mv t keel.toml'
+! exec keel verify-red docs/tasks/fix-a.md
+stderr 'red.prepare failed'
+
+-- card.tmpl --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据
+RED: $RED adds_two

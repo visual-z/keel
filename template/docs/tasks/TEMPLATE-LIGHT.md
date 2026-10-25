@@ -22,7 +22,7 @@ baseline: ⟨开卡时的 commit⟩
 - **D1** ⟨可检查的行为判据⟩
   - 检：test `⟨完整测试名⟩`
 - **D2** gate 全绿；测试计数只因本卡新增的测试而增加，既有测试没有被弱化。
-  - 检：cmd `keel assert-guard`
+  - 检：cmd `keel assert-guard --card docs/tasks/⟨本卡⟩.md`
 
 <!-- 纯删除或纯文档改动：type 用 chore/docs，判据写 grep 或计数，证据写「RED: none — 理由」。 -->
 

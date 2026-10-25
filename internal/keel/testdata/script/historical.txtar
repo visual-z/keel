@@ -1,0 +1,22 @@
+# A historical document is a record of its day: when a file it links to is
+# later moved, the link is followed through git's renames rather than the
+# record rewritten (which would break, say, a pinned hash of it). A link to
+# something that never existed, or was deleted, is still broken.
+repo
+exec sh -c 'echo map > AGENTS.md && mkdir -p docs/research src && echo x > src/a.ts'
+exec sh -c 'printf "%s\n" "[a](../../src/a.ts)" > docs/research/note.md'
+commit 'a note'
+mkdir packages/app
+exec git mv src packages/app/src
+commit 'move'
+
+! exec keel check-docs
+stderr 'note.md: broken link `../../src/a.ts`'
+
+exec sh -c 'sed "s/^glossary_source_dirs = \[\"src\"\]$/&\nhistorical = [\"docs\/research\/**\"]/" keel.toml > t && mv t keel.toml'
+exec keel check-docs
+stdout '1 moved link\(s\) in historical documents followed'
+
+exec sh -c 'printf "%s\n" "[gone](../../nowhere.ts)" >> docs/research/note.md'
+! exec keel check-docs
+stderr 'broken link `../../nowhere.ts`'

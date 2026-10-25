@@ -6,14 +6,17 @@
 
 ## 安装与版本
 
-每个仓库在 `keel.toml` 里钉住 keel 的版本，版本不一致时 keel 拒绝运行：
+每个仓库在 `keel.toml` 里钉住 keel 的版本。PATH 上的 keel 版本与钉住的不同时，它会改为运行钉住的版本，做法同 `GOTOOLCHAIN=auto` 与 bazelisk：先在 `~/.local/share/keel/<版本>/keel` 找，没有就从 GitHub Release 下载，核对 `checksums.txt` 之后再运行。结论只取决于仓库钉住的版本：
 
 ```toml
 [keel]
 version = "1.0.2"
 ```
 
-安装钉住的版本（任选一种）：
+- `KEEL_TOOLCHAIN=local`：只用本机已安装的版本，不下载；版本不符时直接拒绝运行。
+- `KEEL_HOME`：改变版本的存放目录。
+
+装一个入口（任选一种）（任选一种）：
 
 ```bash
 mise install                                             # 推荐：mise.toml 里已写好 "github:visual-z/keel"
@@ -21,7 +24,7 @@ go install github.com/visual-z/keel/cmd/keel@v1.0.2      # 有 Go 工具链时
 # 或从 GitHub Release 下载对应平台的二进制，核对 checksums.txt
 ```
 
-升级 keel 是一次刻意的改动：改 `keel.toml` 与 `mise.toml` 里的版本，跑一遍 `keel gate`，作为一次提交。
+升级 keel 是一次刻意的改动：改 `keel.toml` 里的版本，跑一遍 `keel gate`，作为一次提交。`mise.toml` 里的版本只决定装哪个入口，不需要跟着改。
 
 ## 命令
 
@@ -36,8 +39,9 @@ go install github.com/visual-z/keel/cmd/keel@v1.0.2      # 有 Go 工具链时
 | `verify-red <卡> [--at REV] [--repeat N] [--no-green]` | 在临时 worktree 里重跑每条 `RED:` 和每个 `keel-inject`，必须红；再在工作树里重跑，必须绿 | 测试不在测它声称的东西 |
 | `audit-red [--retain] [--json]` | 所有卡（含存量卡）的 RED commit 都还在，并已钉在保留 ref 下；`--retain` 先校验全部再一次性钉住 | 证据丢了，或声明格式错 |
 | `snapshot <路径…>` | 把 HEAD 加上指定文件提交成一个私有快照，不动 index 和分支；输出 sha，供 `RED:` 使用 | — |
-| `assert-guard [--base B]` | 在 diff 里查删掉的断言、新增的 skip/only、测试里的早退出和 `__eq__` 覆盖、被删的测试文件 | 测试被弱化了 |
-| `gate [--record 卡] [--keep-going] [--only a,b]` | 依次跑 `[[gate.step]]`，直接读退出码，解析测试计数，输出一行回执；`--only` 的结果不能 `--record` | 起点或终点不是绿的 |
+| `assert-guard [--base B \| --card 卡]` | 在 diff 里查删掉的断言、新增的 skip/only、测试里的早退出和 `__eq__` 覆盖、被删的测试文件。默认从与 `guard.base` 的合并基点比起；`--card` 从卡的锚点比起（见「锚点」） | 测试被弱化了 |
+| `gate [--record 卡] [--tier T] [--keep-going] [--only a,b]` | 依次跑 `[[gate.step]]`，直接读退出码，解析测试计数，列出失败的测试名，输出一行回执。`--record` 另外从卡的锚点跑 assert-guard（回执里的 `guard`），只记录通过的 gate，并留下记录（见「回执与日志」）；`--only` 的结果不能 `--record` | 起点或终点不是绿的 |
+| `replay [卡…] [--since REV] [--strict]` | 把每个 `keel-inject` 故障重新打到 HEAD 上，测试必须仍然红。发版前用 `--since <上个 tag>` | 测试已经抓不住它声称能抓的故障 |
 | `check-docs` | AGENTS 行数上限、PLAYBOOK 规则数上限、坏链接与绝对路径链接、地图里的过期路径、决策编号、注册表指向的位置、PROGRESS 顺序、词表禁词 | 文档和代码脱节了 |
 | `check-boundaries` | `[[boundary.rule]]` 定义的正则级架构边界 | 越界依赖或禁用调用 |
 | `mutate [--base B]` | 跑配置好的、只针对 diff 的变异测试工具 | 存活的变异体，就是测试分辨不出的改动 |
@@ -87,7 +91,9 @@ GATE: 9f8e7d6c5b4a+dirty ok build=0 test=0[812p/0f] … (2026-01-02)
 - **占位符。** 模板用 `⟨…⟩` 标占位（不用 `<…>`，因为代码里的泛型合法）。状态离开 todo 后还有占位符，lint 失败。
 - **RED 声明的语法是严格的。** 以 `RED:` 或 `RED(<profile>):` 开头的行必须是 `<7–64 位十六进制 commit> <非空过滤串>`；分支名、`HEAD`、占位符、空过滤串都是错误，不会被悄悄忽略。行尾 `# D1, D2` 是注释。`RED: none <理由>` 只允许用在非行为卡。
 - **RED 的要求。** feat、fix、perf 卡进入 awaiting-author 或 done 时，必须有 `RED:` 或 `keel-inject`。
-- **done 的要求。** 需要一行覆盖全部 gate 步骤、且每步退出码为 0 的 `GATE: … ok` 回执，并且所有 author 类检查都带「已确认：日期」。
+- **done 的要求。** 需要一行覆盖全部 gate 步骤、且每步退出码为 0 的 `GATE: … ok` 回执，并且所有 author 类检查都带「已确认：日期」。卡变成 done 的那次提交里，回执要有记录，而且记录里的树就是当前要提交的树（见「回执与日志」）。已经 done 的卡不会再被重新判定。
+- **gate 层级。** front matter 写 `gate: release`，回执就要包含这个层级的步骤，也就是要用 `keel gate --tier release --record` 来记录。
+- **锚点。** 卡的锚点是开卡提交（冻结点）；如果 `baseline:` 写的 commit 更早，就用 `baseline:`。从锚点比起，卡的全部工作都在 diff 里，无论它提交在哪个分支上。在主干上直接提交时，与 `guard.base` 的合并基点就是 HEAD 本身，不传 `--card` 时只比较了未提交的改动。比冻结点晚的 `baseline:` 不起作用：它只能扩大比较范围，不能缩小。
 - **不解析的地方。** 代码块和 HTML 注释里的内容不算声明。
 - **修订。** `## 修订` 下写「D<n> … 作者确认 YYYY-MM-DD」的条目，`freeze-check` 才放行对应编号的改动。
 - **允许弱化。** `WEAKEN-OK: <测试文件> <理由>（作者确认 YYYY-MM-DD）` 让 `assert-guard` 放过那个文件。
@@ -105,7 +111,9 @@ GATE: 9f8e7d6c5b4a+dirty ok build=0 test=0[812p/0f] … (2026-01-02)
 
 **重复。** `[red] repeat = N`（或 `--repeat N`）让每个声明跑 N 次，每次都必须满足判定；偶发的测试证明不了任何东西。
 
-**故障补丁**只能改产品代码：碰到 `tests.paths` 里的文件会被拒绝。补丁在 HEAD 的临时 worktree 里打上（允许零上下文的单行补丁），主工作区不受影响。
+**故障补丁**只能改产品代码：它在目标上实际改动的文件，只要落在 `tests.paths` 里就会被拒绝。补丁先尝试直接打到 HEAD 上（允许零上下文的单行补丁）。打不上时，keel 找到补丁能打上的那个提交（优先用上次验证时保留在 `refs/keel/fault/` 下的版本，其次是最近的一个祖先），在那里提交故障，再用 git 的三方合并带到 HEAD，就像 cherry-pick。文件改了名、上下文挪了位置，都能合并过去。故障所在的代码已经被重写时，合并会冲突，keel 如实报告「无法重放」，不会去猜。主工作区不受影响。
+
+**依赖漂移。** `[red] lockfiles` 列出的文件在快照和工作树之间不一致时，说明链接过去的依赖是为另一份代码装的。keel 会提示这一点。设了 `[red] prepare` 时，改为在临时 worktree 里为快照自己安装依赖，安装失败就不算红。
 
 **保留。** RED 用的 commit 只在验证通过之后钉到 `<ref_prefix><sha>`（默认 `refs/keel/red/`），squash 或 reflog 过期都抹不掉它。已存在的 ref 指向别处、或是符号引用时，keel 拒绝并且不移动它。
 
@@ -129,12 +137,28 @@ JUnit 报告里的 `<error>`（setup、collection 出错）、重复的 testcase
 [keel]
 version = "1.0.2"             # 必填：钉住的 keel 版本
 
+[gate]
+unbound = ["**/*.md"]         # 回执不绑定的路径（默认：测试路径以外的 markdown）
+
 [[gate.step]]                 # 按顺序执行；第一条失败即停
 name = "test"
 cmd = ["cargo", "test", "--locked"]
 runner = "cargo"              # 可选：解析计数；选中 0 个测试就判失败
 cwd = "."                     # 可选：相对仓库根的运行目录
 timeout_s = 0                 # 可选：0 = 不限
+retries = 0                   # 可选：全量里失败的测试单独重跑几次；每次都过才算偶发（见下）
+max_flaky = 3                 # 可选：失败多于这个数就不重跑，直接判失败
+profile = ""                  # 可选：单独重跑用哪个 [red.profile]
+
+[[gate.step]]
+name = "deny"
+cmd = ["cargo", "deny", "check"]
+external = true               # 依赖仓库之外的状态（公告库、网络）；见下
+
+[[gate.step]]
+name = "eval"
+cmd = ["bun", "run", "eval:test"]
+tier = "release"              # 只在 gate --tier release 时跑；卡用 `gate: release` 要求它
 
 [red]
 runner = "cargo"
@@ -144,6 +168,8 @@ env = { CARGO_TARGET_DIR = "{cache}/cargo-target" }   # 只给临时 worktree；
 timeout_s = 3600
 repeat = 1                    # 每个声明跑几次，必须全部一致
 ref_prefix = "refs/keel/red/" # 保留 ref 的前缀（已有项目可沿用自己的）
+lockfiles = ["Cargo.lock"]    # 快照与工作树的这些文件不一致时提示依赖漂移
+prepare = []                  # 设了就在漂移时为快照自己装依赖，例如 ["bun", "install", "--frozen-lockfile"]
 
 [red.profile.web]             # 多套测试命令；未写的字段继承 [red]
 runner = "junit"
@@ -175,6 +201,7 @@ fixtures = "docs/FIXTURES.md"
 glossary = "CONTEXT.md"
 glossary_source_dirs = ["src"]
 link_exclude = []                # 不做链接检查的 glob
+historical = ["docs/research/**"] # 当时的记录：链接目标后来被移动的，经由 git 改名跟过去，不要求改写原文
 map_files = []                   # 检查反引号路径的「地图」文件；空 = agents、fixtures、invariants
 
 [[boundary.rule]]
@@ -214,3 +241,7 @@ keel adopt --stack cargo     # 没有 keel.toml 时从预设生成；已有就�
 
 - `gate` 的完整输出写到 `.keel/logs/`（已被 gitignore，原始日志不入库），卡里只记一行 `GATE:` 回执。
 - 回执里的 `+dirty` 表示跑的时候有未提交改动。这是常态：回执通常和实现在同一次提交里写进卡。
+- **记录。** `gate --record` 只在 gate 通过时写入。它把被测的树提交到 `refs/keel/gate/<sha>`，提交信息就是回执；回执里的 `tree:<hash>` 指向这棵树。做法同 git-test 按树记录结果。手写的回执没有记录，lint 不认。
+- **什么改动会让回执过期。** 回执绑定的是被测的树，但不包括 `[gate] unbound` 里的路径；默认不包括测试路径以外的 markdown。所以跑完 gate 再写证据、写收尾说明、改卡片，都不必重跑。改了代码或测试，回执就过期，lint 会列出改了哪些文件。在 pre-commit hook 里判定的是要提交的 index，不是工作树：没暂存的改动不影响这次提交。
+- **偶发。** 步骤设了 `retries = N` 时，全量运行里失败的测试会被单独重跑 N 次。每次都通过就算偶发：回执记为 `[…/1flaky]`，记录里写出它的名字，不阻塞这次 gate。单独跑也失败的，是真失败。失败数超过 `max_flaky` 时，说明构建坏了，不重跑。keel 无法逐个列出名字的失败（名字数与失败数对不上）也不重跑。偶发不是修复，它的名字留在记录里，供你另开卡去修。默认 `retries = 0`，就是不重跑。
+- **外部步骤。** `external = true` 的步骤失败时，`gate --record` 会在卡的锚点上再跑一次这个步骤。锚点也失败，说明不是这张卡造成的：回执记为 `name=1(base)`，不阻塞这张卡，记录里写明两边的退出码。锚点通过而这里失败，就是这张卡的问题，照常阻塞。

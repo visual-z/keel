@@ -52,7 +52,7 @@ baseline: ⟨开卡时的 commit；gate 回执里的测试计数⟩
 - **D3** 计数：测试数只因本卡新增的测试而增加（基线见 front matter 的 baseline）。
   - 检：cmd `keel gate`
 - **D4** 不弱化既有测试。
-  - 检：cmd `keel assert-guard`
+  - 检：cmd `keel assert-guard --card docs/tasks/⟨本卡⟩.md`
 
 <!-- 检的 kind：test property inject cmd grep author measure。
      author：作者手测，作者确认后在行尾追加「已确认：YYYY-MM-DD」；没确认前状态只能停在 awaiting-author。 -->
@@ -66,7 +66,6 @@ baseline: ⟨开卡时的 commit；gate 回执里的测试计数⟩
 ```bash
 ⟨定向测试命令⟩
 keel verify-red docs/tasks/⟨本卡⟩.md
-keel assert-guard
 keel gate --record docs/tasks/⟨本卡⟩.md
 ```
 

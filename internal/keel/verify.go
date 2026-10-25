@@ -26,43 +26,6 @@ func PatchPaths(patch string) []string {
 	return out
 }
 
-// RenamesUpTo maps every path ever renamed in the history of rev to where it
-// lives at rev, following chains (a → b → c gives a → c and b → c).
-func RenamesUpTo(root, rev string) map[string]string {
-	out, _ := Git(root, "-c", "core.quotePath=false", "log", "--find-renames", "--diff-filter=R", "--name-status", "--format=", "--reverse", rev)
-	where := map[string]string{}
-	for _, line := range strings.Split(out, "\n") {
-		f := strings.Split(line, "\t")
-		if len(f) != 3 || !strings.HasPrefix(f[0], "R") {
-			continue
-		}
-		for k, v := range where {
-			if v == f[1] {
-				where[k] = f[2]
-			}
-		}
-		where[f[1]] = f[2]
-	}
-	return where
-}
-
-// renamePatchPath points a unified diff's headers for one file at its new path.
-func renamePatchPath(patch, from, to string) string {
-	var b strings.Builder
-	for _, line := range strings.SplitAfter(patch, "\n") {
-		switch {
-		case line == "--- a/"+from+"\n" || line == "--- a/"+from:
-			line = strings.Replace(line, from, to, 1)
-		case line == "+++ b/"+from+"\n" || line == "+++ b/"+from:
-			line = strings.Replace(line, from, to, 1)
-		case strings.HasPrefix(line, "diff --git a/"+from+" b/"+from):
-			line = strings.Replace(strings.Replace(line, "a/"+from, "a/"+to, 1), "b/"+from, "b/"+to, 1)
-		}
-		b.WriteString(line)
-	}
-	return b.String()
-}
-
 type verifyOpts struct {
 	at      string
 	noGreen bool
@@ -87,6 +50,10 @@ func VerifyRed(root string, cfg *Config, cardPath string, o verifyOpts, w io.Wri
 	var filters []sel
 	type pin struct{ prefix, sha string }
 	var pins []pin
+	var faults []struct {
+		inj    Inject
+		source string
+	}
 	repeats := func(red RedConfig) int {
 		if o.repeat > 0 {
 			return o.repeat
@@ -109,9 +76,12 @@ func VerifyRed(root string, cfg *Config, cardPath string, o verifyOpts, w io.Wri
 		fmt.Fprintf(w, "RED     %s  %s%s\n", sha[:12], label, c.Filter)
 		var last RunOutcome
 		for n := 0; n < repeats(red); n++ {
-			wt, err := NewWorktree(root, sha, red.Link)
+			wt, err := NewWorktree(root, sha, red)
 			if err != nil {
 				return err
+			}
+			if note := wt.DriftNote(); note != "" && n == 0 {
+				fmt.Fprintf(w, "        %s\n", note)
 			}
 			out, err := RunFilter(root, red, wt.Path, c.Filter)
 			wt.Close()
@@ -136,56 +106,26 @@ func VerifyRed(root string, cfg *Config, cardPath string, o verifyOpts, w io.Wri
 		if !ok {
 			return failf("cannot resolve %s", at)
 		}
-		var renames map[string]string
 		for _, inj := range card.Injects {
-			touched := PatchPaths(inj.Patch)
-			if len(touched) == 0 {
-				return failf("line %d: keel-inject block is not a unified diff", inj.Line)
+			plan, err := planFault(root, inj, base)
+			if err != nil {
+				return failf("line %d: %v", inj.Line, err)
 			}
-			// A fault written before a move names the file where it was. It is
-			// applied where that file is now, and checked against tests there.
-			var moved []string
-			for i, p := range touched {
-				if _, exists := Git(root, "cat-file", "-e", base+":"+p); exists {
-					continue
-				}
-				if renames == nil {
-					renames = RenamesUpTo(root, base)
-				}
-				if to, ok := renames[p]; ok {
-					inj.Patch = renamePatchPath(inj.Patch, p, to)
-					touched[i] = to
-					moved = append(moved, to+", renamed from "+p)
-				}
-			}
-			var bad []string
-			for _, p := range touched {
-				if GlobMatch(p, cfg.Tests.Paths) {
-					bad = append(bad, p)
-				}
-			}
-			if len(bad) > 0 {
+			// Judged by what the fault changes on the target, where the files
+			// are now: a patch written before a move cannot reach a test.
+			if bad := testPaths(cfg, plan.touched); len(bad) > 0 {
 				return failf("line %d: an injected fault must break product code, not tests: %s", inj.Line, strings.Join(bad, ", "))
 			}
 			red, err := cfg.RedFor(inj.Profile)
 			if err != nil {
 				return err
 			}
-			shown := touched
-			if len(moved) > 0 {
-				shown = moved
-			}
-			fmt.Fprintf(w, "INJECT  %s+patch  %s  (%s)\n", base[:12], inj.Filter, strings.Join(shown, ", "))
+			fmt.Fprintf(w, "INJECT  %s+patch  %s  (%s; %s)\n", base[:12], inj.Filter, strings.Join(plan.touched, ", "), plan.how)
 			var last RunOutcome
 			for n := 0; n < repeats(red); n++ {
-				wt, err := NewWorktree(root, base, red.Link)
+				wt, err := NewWorktree(root, plan.commit, red)
 				if err != nil {
 					return err
-				}
-				// --unidiff-zero: a one-line fault is naturally written without context.
-				if _, msg, ok := GitIn(wt.Path, inj.Patch, nil, "apply", "--unidiff-zero", "--whitespace=nowarn", "-"); !ok {
-					wt.Close()
-					return failf("line %d: the fault patch does not apply to %s: %s", inj.Line, base[:12], msg)
 				}
 				out, err := RunFilter(root, red, wt.Path, inj.Filter)
 				wt.Close()
@@ -199,6 +139,10 @@ func VerifyRed(root string, cfg *Config, cardPath string, o verifyOpts, w io.Wri
 			}
 			fmt.Fprintf(w, "        red: %d/%d selected tests failed under the injected fault\n", last.Sum.Failed, last.Sum.Selected)
 			filters = append(filters, sel{inj.Profile, inj.Filter})
+			faults = append(faults, struct {
+				inj    Inject
+				source string
+			}{inj, plan.source})
 		}
 	}
 	if o.noGreen {
@@ -236,6 +180,9 @@ func VerifyRed(root string, cfg *Config, cardPath string, o verifyOpts, w io.Wri
 		if err := Retain(root, p.prefix, p.sha); err != nil {
 			return err
 		}
+	}
+	for _, f := range faults {
+		retainFault(root, f.inj, f.source)
 	}
 	fmt.Fprintf(w, "ok      %d RED claim(s), %d injected fault(s) verified\n", len(card.Reds), len(card.Injects))
 	return nil
@@ -358,14 +305,11 @@ func Snapshot(root string, cfg *Config, paths []string, w io.Writer) error {
 	if !ok {
 		return failf("snapshot needs at least one commit")
 	}
-	f, err := os.CreateTemp("", "keel-index-")
+	idx, done, err := tempIndex(root)
 	if err != nil {
 		return err
 	}
-	idx := f.Name()
-	f.Close()
-	os.Remove(idx)
-	defer os.Remove(idx)
+	defer done()
 	env := append(os.Environ(), "GIT_INDEX_FILE="+idx)
 	if _, msg, ok := GitIn(root, "", env, "read-tree", head); !ok {
 		return failf("git read-tree failed: %s", msg)

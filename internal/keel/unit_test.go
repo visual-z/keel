@@ -1,10 +1,20 @@
 package keel
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
 	"math/rand"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -15,7 +25,7 @@ func TestCargoCountsOnlyTestsThatRanNeverIgnoredOrResultlessSubExecutors(t *test
 		"running 4 tests\n" + // a nested sub-executor: running N, then no result line
 		"running 1 test\ntest d ... FAILED\n" +
 		"test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n"
-	if s := ParseCargo(out); s != (Summary{Selected: 3, Failed: 1, Skipped: 1}) {
+	if s := ParseCargo(out); counts(s) != (tally{Selected: 3, Failed: 1, Skipped: 1}) {
 		t.Fatalf("got %+v", s)
 	}
 }
@@ -24,7 +34,7 @@ func TestARealCargoTestFailureIsRedNotACompileError(t *testing.T) {
 	out := "running 1 test\ntest damage::tests::coalesces ... FAILED\n\nfailures:\n    damage::tests::coalesces\n\n" +
 		"test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 226 filtered out; finished in 0.00s\n\n" +
 		"error: test failed, to rerun pass `-p core --lib`\nerror: 1 target failed:\n    `-p core --lib`\n"
-	if s := ParseCargo(out); s != (Summary{Selected: 1, Failed: 1}) {
+	if s := ParseCargo(out); counts(s) != (tally{Selected: 1, Failed: 1}) {
 		t.Fatalf("got %+v", s)
 	}
 	for _, bad := range []string{"error[E0425]: cannot find value", "error: could not compile `core` (lib test) due to 1 previous error", "error: linking with `cc` failed"} {
@@ -41,12 +51,40 @@ func TestACargoFilterThatOnlyHitsIgnoredTestsSelectsNothing(t *testing.T) {
 	}
 }
 
+// tally is what a summary counted, comparable with ==.
+type tally struct {
+	Selected, Failed, Skipped int
+	Invalid                   string
+}
+
+func counts(s Summary) tally { return tally{s.Selected, s.Failed, s.Skipped, s.Invalid} }
+
+func TestEachFormatNamesItsFailedTests(t *testing.T) {
+	cargo := "running 2 tests\ntest a::ok ... ok\ntest a::bad ... FAILED\ntest result: FAILED. 1 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out\n"
+	bun := "(fail) suite > a timing test [5002.08ms]\n(fail) plain\n 1 pass\n 2 fail\nRan 3 tests across 1 file. [9ms]\n"
+	goj := `{"Action":"fail","Package":"p","Test":"TestC/sub"}` + "\n" + `{"Action":"fail","Package":"p","Test":"TestC"}`
+	junit := `<testsuite><testcase classname="c" name="x"><failure/></testcase></testsuite>`
+	for name, c := range map[string]struct {
+		got  []string
+		want []string
+	}{
+		"cargo": {ParseCargo(cargo).FailedNames, []string{"a::bad"}},
+		"bun":   {ParseBun(bun).FailedNames, []string{"suite > a timing test", "plain"}},
+		"go":    {ParseGoJSON(goj).FailedNames, []string{"p TestC/sub", "p TestC"}},
+		"junit": {ParseJUnit(writeTemp(t, junit)).FailedNames, []string{"x"}},
+	} {
+		if !reflect.DeepEqual(c.got, c.want) {
+			t.Errorf("%s: got %q, want %q", name, c.got, c.want)
+		}
+	}
+}
+
 const bunRed = "(fail) fixture proof\n 0 pass\n 1 fail\nRan 1 test across 1 file. [1ms]\n"
 
 // Ported from xeno's red-evidence tests: a normal failed test, and nothing
 // that merely looks like one.
 func TestBunSummariesRequireANormalFailedTestAndRejectMixedLoaderOrDuplicateSummaries(t *testing.T) {
-	if s := ParseBun(bunRed); s != (Summary{Selected: 1, Failed: 1}) {
+	if s := ParseBun(bunRed); counts(s) != (tally{Selected: 1, Failed: 1}) {
 		t.Fatalf("got %+v", s)
 	}
 	for _, bad := range []string{"1 error\n" + bunRed, "Unhandled error between tests\n" + bunRed, bunRed + bunRed,
@@ -69,7 +107,7 @@ func TestGoJSONCountsVerdictsNotRunsAndRejectsBuildAndPackageFailures(t *testing
 	}
 	out := strings.Join([]string{ev("run", "TestA"), ev("pass", "TestA"), ev("run", "TestB"), ev("skip", "TestB"),
 		ev("run", "TestC"), ev("fail", "TestC/sub"), ev("fail", "TestC"), `{"Action":"fail","Package":"p"}`}, "\n")
-	if s := ParseGoJSON(out); s != (Summary{Selected: 3, Failed: 2, Skipped: 1}) {
+	if s := ParseGoJSON(out); counts(s) != (tally{Selected: 3, Failed: 2, Skipped: 1}) {
 		t.Fatalf("got %+v", s)
 	}
 	for _, bad := range []string{`{"Action":"build-fail","Package":"p"}`, "# p\n./x.go:3:1: syntax error",
@@ -93,7 +131,7 @@ func TestJUnitTreatsErrorsDuplicatesAndMissingReportsAsInvalid(t *testing.T) {
 	ok := `<testsuites><testsuite name="s" errors="0"><testcase classname="c" name="a"/>` +
 		`<testcase classname="c" name="b"><failure message="x"/></testcase>` +
 		`<testcase classname="c" name="z"><skipped/></testcase></testsuite></testsuites>`
-	if s := ParseJUnit(writeTemp(t, ok)); s != (Summary{Selected: 2, Failed: 1, Skipped: 1}) {
+	if s := ParseJUnit(writeTemp(t, ok)); counts(s) != (tally{Selected: 2, Failed: 1, Skipped: 1}) {
 		t.Fatalf("got %+v", s)
 	}
 	for name, bad := range map[string]string{
@@ -155,9 +193,22 @@ func TestReceiptsMustShowEveryStepExitingZero(t *testing.T) {
 		"web-paint=0 build=0 test=0[0 tests]": true,
 	}
 	for r, want := range cases {
-		if ReceiptCovers(" "+r, steps) != want {
+		if ReceiptCovers(" "+r, ReceiptRule{Steps: steps}) != want {
 			t.Errorf("%q: want %v", r, want)
 		}
+	}
+}
+
+func TestOnlyAnExternalStepMayShowAFailureItsAnchorShares(t *testing.T) {
+	rule := ReceiptRule{Steps: []string{"test", "deny"}, External: map[string]bool{"deny": true}}
+	if !ReceiptCovers(" test=0[3p/0f] deny=1(base)", rule) {
+		t.Error("an external step failing at its anchor too must not block")
+	}
+	if ReceiptCovers(" test=1(base) deny=0", rule) {
+		t.Error("a non-external step must exit 0")
+	}
+	if ReceiptCovers(" test=0 deny=1", rule) {
+		t.Error("an external failure the anchor does not share blocks")
 	}
 }
 
@@ -199,6 +250,8 @@ func TestAVersionMismatchRefusesToRunAndAMissingPinIsAnError(t *testing.T) {
 	t.Cleanup(func() { Version = old })
 	write := func(s string) { os.WriteFile(filepath.Join(dir, configFile), []byte(s), 0o644) }
 	Version = "1.2.0"
+	t.Setenv("KEEL_TOOLCHAIN", "local")
+	t.Setenv("KEEL_HOME", t.TempDir())
 	write("[keel]\nversion = \"1.1.0\"\n")
 	if _, err := loadPinned(dir, os.Stderr); err == nil || !strings.Contains(err.Error(), "pins 1.1.0") {
 		t.Fatalf("mismatch must fail: %v", err)
@@ -330,5 +383,88 @@ func TestRetainRefusesToMoveAnExistingRefOrASymbolicOne(t *testing.T) {
 	}
 	if RefStateOf(dir, prefix, b) != RefRetained {
 		t.Fatal("not retained")
+	}
+}
+
+// fakeRelease serves a release the way GitHub does: an archive per platform
+// and a checksums.txt. corrupt serves an archive that does not match.
+func fakeRelease(t *testing.T, version string, corrupt bool) string {
+	name := fmt.Sprintf("keel_%s_%s_%s", version, runtime.GOOS, runtime.GOARCH)
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	body := []byte("#!/bin/sh\necho pinned\n")
+	tw.WriteHeader(&tar.Header{Name: name + "/keel", Mode: 0o755, Size: int64(len(body))})
+	tw.Write(body)
+	tw.Close()
+	gz.Close()
+	archive := buf.Bytes()
+	sum := sha256.Sum256(archive)
+	if corrupt {
+		archive = append([]byte{}, archive...)
+		archive[len(archive)-1] ^= 0xff
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v" + version + "/checksums.txt":
+			fmt.Fprintf(w, "%s  %s.tar.gz\n", hex.EncodeToString(sum[:]), name)
+		case "/v" + version + "/" + name + ".tar.gz":
+			w.Write(archive)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestAMismatchRunsThePinnedReleaseInstallingItFromAVerifiedDownload(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	old, oldExec, oldInv := Version, execFn, invocation
+	t.Cleanup(func() { Version, execFn, invocation = old, oldExec, oldInv })
+	Version = "1.2.0"
+	invocation = []string{"gate", "--record", "x.md"}
+	var ran []string
+	var ranEnv []string
+	execFn = func(bin string, argv, env []string) error { ran, ranEnv = argv, env; return nil }
+	t.Setenv("KEEL_HOME", home)
+	t.Setenv("KEEL_TOOLCHAIN", "")
+	t.Setenv(switchedEnv, "")
+	os.WriteFile(filepath.Join(dir, configFile), []byte("[keel]\nversion = \"1.1.0\"\n"), 0o644)
+
+	t.Setenv("KEEL_DOWNLOAD_BASE", fakeRelease(t, "1.1.0", true))
+	if _, err := loadPinned(dir, io.Discard); err == nil || !strings.Contains(err.Error(), "does not match checksums.txt") {
+		t.Fatalf("a corrupt download must be refused: %v", err)
+	}
+	if exists(toolchainPath("1.1.0")) || ran != nil {
+		t.Fatal("a refused download must install and run nothing")
+	}
+
+	t.Setenv("KEEL_DOWNLOAD_BASE", fakeRelease(t, "1.1.0", false))
+	if _, err := loadPinned(dir, io.Discard); err != nil {
+		t.Fatalf("switch: %v", err)
+	}
+	if want := []string{toolchainPath("1.1.0"), "gate", "--record", "x.md"}; !reflect.DeepEqual(ran, want) {
+		t.Fatalf("ran %q, want %q", ran, want)
+	}
+	if !contains(ranEnv, switchedEnv+"=1.1.0") {
+		t.Fatal("the switched process must know it was switched to")
+	}
+	if b, _ := os.ReadFile(toolchainPath("1.1.0")); !strings.Contains(string(b), "pinned") {
+		t.Fatal("the release binary was not installed")
+	}
+
+	// Installed now: no download needed (the server is gone).
+	ran = nil
+	t.Setenv("KEEL_DOWNLOAD_BASE", "http://127.0.0.1:1")
+	if _, err := loadPinned(dir, io.Discard); err != nil || ran == nil {
+		t.Fatalf("an installed release must run without downloading: %v", err)
+	}
+
+	// A switched binary that still disagrees refuses instead of looping.
+	ran = nil
+	t.Setenv(switchedEnv, "1.1.0")
+	if _, err := loadPinned(dir, io.Discard); err == nil || !strings.Contains(err.Error(), "already switched") || ran != nil {
+		t.Fatalf("a second switch must refuse: %v", err)
 	}
 }

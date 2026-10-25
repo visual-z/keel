@@ -2,7 +2,8 @@
 // in a copy of the source and requires the test suite to go red. A check
 // whose removal no test notices is a check nothing verifies.
 //
-//	go run ./internal/selfmut
+//	go run ./internal/selfmut            # every mutant
+//	go run ./internal/selfmut -anchors   # only check that each anchor is unique
 //
 // Add a mutant here whenever you add or change a check in internal/keel.
 package main
@@ -39,8 +40,8 @@ var mutants = []mutant{
 	{"junit duplicate accepted", "runner.go", "\t\t\tif seen[id] {", "\t\t\tif false {"},
 	{"junit missing report accepted", "runner.go", "\t\treturn Summary{Invalid: \"no JUnit report was written", "\t\treturn Summary{Selected: 1, Failed: 1}\n\t\t_ = Summary{Invalid: \"no JUnit report was written"},
 	// verify-red mechanics
-	{"inject may edit tests", "verify.go", "\t\t\tif len(bad) > 0 {", "\t\t\tif false {"},
-	{"zero-context patch refused", "verify.go", "\"apply\", \"--unidiff-zero\", ", "\"apply\", "},
+	{"inject may edit tests", "verify.go", "\t\t\tif bad := testPaths(cfg, plan.touched); len(bad) > 0 {\n\t\t\t\treturn failf(", "\t\t\tif bad := testPaths(cfg, plan.touched); false {\n\t\t\t\treturn failf("},
+	{"zero-context patch refused", "fault.go", "\"apply\", \"--cached\", \"--unidiff-zero\", ", "\"apply\", \"--cached\", "},
 	{"retained before green", "verify.go", "\t\tpins = append(pins, pin{red.RefPrefix, sha})\n", "\t\tpins = append(pins, pin{red.RefPrefix, sha})\n\t\t_ = Retain(root, red.RefPrefix, sha)\n"},
 	{"green shares the fault cache", "runner.go", "\tisolated := filepath.Clean(tree) != filepath.Clean(root)", "\tisolated := true"},
 	{"repeat ignored", "verify.go", "\tif o.repeat > 0 {\n\t\t\treturn o.repeat", "\tif false {\n\t\t\treturn o.repeat"},
@@ -74,11 +75,11 @@ var mutants = []mutant{
 	{"assert drop ignored", "check.go", "\t\tif s.assertDel > s.assertAdd {", "\t\tif false {"},
 	{"skip ignored", "check.go", "\t\tif s.skipAdd > 0 {", "\t\tif false {"},
 	{"early exit ignored", "check.go", "\t\tif s.suspAdd > 0 {", "\t\tif false {"},
-	{"deleted test ignored", "check.go", "\t\tif GlobMatch(f, t.Paths) && !allowed[f] {", "\t\tif false {"},
+	{"deleted test ignored", "check.go", "\t\tif (GlobMatch(f, t.Paths) || GlobMatch(f, baseTests)) && !allowed[f] {", "\t\tif false {"},
 	{"header detection naive", "check.go", "\t\tif inHeader {", "\t\tif inHeader || strings.HasPrefix(line, \"--- \") || strings.HasPrefix(line, \"+++ \") {"},
 	// gate
 	{"partial gate recordable", "gate.go", "\tif len(o.only) > 0 && o.record != \"\" {", "\tif false {"},
-	{"zero-test gate green", "gate.go", "\t\t\tcase s.Selected == 0:\n\t\t\t\tif code == 0 {\n\t\t\t\t\tcode = 1", "\t\t\tcase s.Selected == 0:\n\t\t\t\tif false {\n\t\t\t\t\tcode = 1"},
+	{"zero-test gate green", "gate.go", "\tcase s.Selected == 0:\n\t\tif code == 0 {\n\t\t\tcode = 1", "\tcase s.Selected == 0:\n\t\tif false {\n\t\t\tcode = 1"},
 	// docs
 	{"map size ignored", "docs.go", "n > d.AgentsMaxLines {", "n > d.AgentsMaxLines+1000 {"},
 	{"broken link ignored", "docs.go", "\t\t\tcase path != \"\" && !exists(filepath.Join(dir, path)):", "\t\t\tcase false && !exists(filepath.Join(dir, path)):"},
@@ -96,13 +97,63 @@ var mutants = []mutant{
 	{"pseudo-version is a release", "cli.go", "\tif m := releaseRe.FindStringSubmatch(v); m != nil {\n\t\treturn m[1]\n\t}\n\treturn \"dev\"", "\treturn strings.TrimPrefix(v, \"v\")"},
 	{"hook failures swallowed", "cli.go", "\t\t\tif len(failed) > 0 {\n\t\t\t\treturn failf(\"pre-commit:", "\t\t\tif false {\n\t\t\t\treturn failf(\"pre-commit:"},
 	{"commit message unchecked", "scaffold.go", "\t\tif !conventional.MatchString(l) {", "\t\tif false {"},
+	// anchors, records, tiers, flakes
+	{"guard ignores the card anchor", "anchor.go", "\tif cardPath != \"\" {\n\t\tcard, err := LoadCard(root, cardPath)", "\tif false {\n\t\tcard, err := LoadCard(root, cardPath)"},
+	{"late baseline narrows the guard", "anchor.go", "\tcase frozen && hasBase && base != freeze && isAncestor(root, base, freeze):", "\tcase frozen && hasBase && base != freeze:"},
+	{"gate records without guarding", "gate.go", "\t\tgerr := AssertGuard(root, cfg, \"\", guardCard, &buf)", "\t\tgerr := error(nil)\n\t\t_ = guardCard"},
+	{"failing gate recorded", "gate.go", "\tif !ok {\n\t\tif o.record != \"\" {", "\tif !ok && o.record == \"\" {\n\t\tif o.record != \"\" {"},
+	{"receipt without a record accepted", "record.go", "\ttree, ok := findRecord(root, line)\n\tif !ok {", "\ttree, ok := findRecord(root, line)\n\tif !ok && false {"},
+	{"stale receipt accepted", "record.go", "\tif now != tree {", "\tif false {"},
+	{"untreed receipt accepted", "record.go", "\tif !receiptTree.MatchString(last.Results) {", "\tif false {"},
+	{"tracked deletion ignored", "record.go", "f[0] == \"D\" && !tracked {", "f[0] == \"D\" {\n\t\t\t\t_ = tracked"},
+	{"untracked leftovers stale", "record.go", "\t\tif len(files) == 0 {\n\t\t\treturn nil\n\t\t}", ""},
+	{"tests are unbound", "record.go", "\treturn GlobMatch(path, pats) && !GlobMatch(path, scope)", "\treturn GlobMatch(path, pats) || GlobMatch(path, scope)"},
+	{"hook judges the working tree", "cli.go", "{\"lint\", func() error { return lint(root, cfg, nil, true, stdout) }},", "{\"lint\", func() error { return lint(root, cfg, nil, false, stdout) }},"},
+	{"flake that fails alone accepted", "gate.go", "\t\t\tif RequireGreen(out, \"retry\") != nil {\n\t\t\t\tbreak", "\t\t\tif RequireGreen(out, \"retry\") != nil && false {\n\t\t\t\tbreak"},
+	{"max flaky ignored", "gate.go", "len(failed) <= step.MaxFlaky {", "true {"},
+	{"retries on by default", "gate.go", "\t\tif code != 0 && step.Retries > 0 &&", "\t\tif code != 0 && step.Retries >= 0 &&"},
+	{"tiered steps run by default", "gate.go", "\t\tif step.Tier != \"\" && step.Tier != o.tier {", "\t\tif false {"},
+	{"card tier not required", "gate.go", "\t\tif missing := missingTiers(cfg, card, o.tier); len(missing) > 0 {", "\t\tif missing := missingTiers(cfg, card, o.tier); false {\n\t\t\t_ = missing"},
+	{"any step may claim base", "card.go", "\t\tif m[2] == \"0\" || (m[3] != \"\" && rule.External[m[1]]) {", "\t\tif m[2] == \"0\" || m[3] != \"\" {"},
+	{"external failure always excused", "gate.go", "\t\t\tif base != 0 {", "\t\t\tif true {"},
+	// faults, dependencies, docs, toolchain
+	{"fault merge conflict ignored", "fault.go", "\tif !ok {\n\t\tconflicts := lines(out)[1:]", "\tif false {\n\t\tconflicts := lines(out)[1:]"},
+	{"decayed fault passes replay", "fault.go", "\tif decayed > 0 || (o.strict && skipped+abnormal > 0) {", "\tif o.strict && skipped+abnormal > 0 {"},
+	{"replay faults may edit tests", "fault.go", "\t\t\tif bad := testPaths(cfg, plan.touched); len(bad) > 0 {\n\t\t\t\tabnormal++", "\t\t\tif bad := testPaths(cfg, plan.touched); false {\n\t\t\t\t_ = bad\n\t\t\t\tabnormal++"},
+	{"lockfile drift unseen", "git.go", "\t\tif then != readFile(filepath.Join(root, lock)) {", "\t\tif false && then != \"\" {"},
+	{"prepare failure ignored", "git.go", "\t\tif err != nil || res.Code != 0 {\n\t\t\tw.Close()", "\t\tif err != nil {\n\t\t\tw.Close()"},
+	{"historical links unchecked", "docs.go", "ok && exists(filepath.Join(root, to)) {", "true {\n\t\t\t\t\t\t_ = to\n\t\t\t\t\t\t_ = ok"},
+	{"links followed outside history", "docs.go", "\t\t\t\tif GlobMatch(relPath, d.Historical) {", "\t\t\t\tif true {"},
+	{"download checksum unchecked", "toolchain.go", "hex.EncodeToString(got[:]) != want {", "hex.EncodeToString(got[:]) == \"\" {"},
+	{"switch loops", "toolchain.go", "\tif os.Getenv(switchedEnv) != \"\" {", "\tif false {"},
 	{"output race", "util.go", "\tw.mu.Lock()\n\tdefer w.mu.Unlock()\n", ""},
 }
 
 func main() {
 	repo, _ := os.Getwd()
-	if len(os.Args) > 1 {
-		repo = os.Args[1]
+	anchorsOnly := false
+	for _, a := range os.Args[1:] {
+		if a == "-anchors" {
+			anchorsOnly = true
+		} else {
+			repo = a
+		}
+	}
+	if anchorsOnly {
+		bad := 0
+		for _, m := range mutants {
+			src, err := os.ReadFile(filepath.Join(repo, "internal", "keel", m.file))
+			check(err)
+			if n := strings.Count(string(src), m.old); n != 1 {
+				fmt.Printf("mutant %q: anchor found %d times in %s\n", m.name, n, m.file)
+				bad++
+			}
+		}
+		fmt.Printf("%d mutant(s), %d bad anchor(s)\n", len(mutants), bad)
+		if bad > 0 {
+			os.Exit(2)
+		}
+		return
 	}
 	var survived []string
 	for _, m := range mutants {

@@ -3,7 +3,7 @@ repo
 cp card.md docs/tasks/fix-a.md
 exec keel gate --record docs/tasks/fix-a.md
 stdout 'unit=0\[2p/0f\]'
-grep '^GATE: [0-9a-f]{12}\+dirty ok unit=0\[2p/0f\]' docs/tasks/fix-a.md
+grep '^GATE: [0-9a-f]{12}\+dirty ok tree:[0-9a-f]{12} unit=0\[2p/0f\] guard=0' docs/tasks/fix-a.md
 exists .keel/logs
 
 # A restricted run cannot be recorded.
@@ -13,7 +13,8 @@ stderr 'not a completion receipt'
 # A red gate says so.
 setvalue 3
 ! exec keel gate
-stdout ' fail unit=101'
+stdout ' fail tree:[0-9a-f]{12} unit=101'
+stdout 'failed: adds_two'
 
 # A test step that runs nothing is not green.
 exec sh -c 'printf "" > tests/cases.sh'

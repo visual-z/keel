@@ -42,7 +42,7 @@ GREEN 可能被截断的方式：property 测试在第一页就 `return`，或�
 - **D3** 把边界比较 `>` 改回 `>=` 时，测试必须变红。
   - 检：inject `pagination_`
 - **D4** 不弱化既有测试；测试计数 412 → 414。
-  - 检：cmd `keel assert-guard`
+  - 检：cmd `keel assert-guard --card docs/tasks/fix-pagination-duplicate.md`
 
 ## 设计
 
@@ -56,7 +56,6 @@ GREEN 可能被截断的方式：property 测试在第一页就 `return`，或�
 
 ```bash
 keel verify-red docs/tasks/fix-pagination-duplicate.md
-keel assert-guard
 keel gate --record docs/tasks/fix-pagination-duplicate.md
 ```
 

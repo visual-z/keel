@@ -35,7 +35,7 @@ go install github.com/visual-z/keel/cmd/keel@v1.0.2 # with a Go toolchain
 
 You can also download an archive from [Releases](https://github.com/visual-z/keel/releases) and verify it against `checksums.txt`.
 
-Every repository pins the release it is checked with in `keel.toml` (`[keel] version = "1.0.2"`). A different keel refuses to run, so a result never depends on which keel happens to be on `PATH`.
+Every repository pins the release it is checked with in `keel.toml` (`[keel] version = "1.0.2"`). Any other keel on `PATH` switches to that release, the way `GOTOOLCHAIN=auto` and bazelisk do: it installs it from the release, checked against `checksums.txt`, and runs it. A result never depends on which keel happens to be on `PATH`. `KEEL_TOOLCHAIN=local` never downloads.
 
 ## Start a project
 
@@ -52,10 +52,11 @@ For an existing project, run `keel adopt --stack <preset>`. It adds only the mis
 | Command | The claim it verifies |
 |---|---|
 | `verify-red <card>` | *"This test was red before the fix."* keel re-runs the test in a throwaway worktree at the RED commit, where it must fail, and then in the working tree, where it must pass. With `repeat = N` every run must agree. Compile errors, load errors, skipped or zero selected tests, timeouts, crashes, and exit codes that disagree with the report do not count as red. |
-| `verify-red` (fault patch) | *"The tests really catch this bug."* keel applies the card's `keel-inject` patch to HEAD and requires the tests to go red. The patch may touch product code only, never tests. A patch written before a file moved is applied where the file is now. |
+| `verify-red` (fault patch) | *"The tests really catch this bug."* keel applies the card's `keel-inject` patch to HEAD and requires the tests to go red. The patch may touch product code only, never tests. A patch that no longer applies is committed where it does and carried to HEAD by a three-way merge, so moves and shifted context are followed; a fault whose code was rewritten is reported, not guessed at. |
 | `freeze-check` | *"The definition of done was not relaxed."* keel compares the card with the commit that opened it. Criteria may only be added; changing one needs an author-confirmed revision. |
-| `assert-guard` | *"No test was weakened."* keel scans the diff for removed assertions, new skip/only markers, early exits and `__eq__` overrides in tests, and deleted test files. A moved test is compared with its old content, so a layout change is clean; moving a test out of the test paths counts as deleting it. |
-| `gate --record <card>` | *"Every check passed."* keel reads each step's exit code directly and counts the tests that actually ran (zero ran means failure). It writes a one-line receipt into the card; a partial run cannot be recorded. |
+| `assert-guard` | *"No test was weakened."* keel scans the diff for removed assertions, new skip/only markers, early exits and `__eq__` overrides in tests, and deleted test files. A moved test is compared with its old content, so a layout change is clean; moving a test out of the test paths counts as deleting it. `--card` compares from where the card opened, which also works on trunk, where the merge base is HEAD itself. |
+| `gate --record <card>` | *"Every check passed."* keel reads each step's exit code directly and counts the tests that actually ran (zero ran means failure). It names the tests that failed. A step may re-run those alone (`retries`): a test that passes every time alone is a flake, named in the receipt, while one that fails alone is a real failure. `--record` also guards the card from where it opened. Only a passing gate is recorded, as a commit of the tested tree under `refs/keel/gate/`, and the receipt names that tree. A card can only be closed with a receipt whose tree is the tree being closed, so a hand-written or stale receipt does not count. Notes written after the gate do not make it stale. |
+| `replay [--since REV]` | *"The tests still catch every fault they once caught."* keel re-applies every card's fault to HEAD and requires red. A fault the tests no longer catch fails. |
 | `audit-red` | Every claim, in legacy cards too, names a commit that is retained under `refs/keel/red/`. |
 | `lint`, `check-docs`, `check-boundaries` | Card structure and evidence; doc budgets, links, stale map paths, decision numbering, registries, glossary; regex architecture boundaries. |
 
@@ -67,6 +68,9 @@ keel reads test results from **output formats, not tools**. It prefers structure
 |---|---|
 | [lefthook](https://github.com/evilmartians/lefthook), [prek](https://github.com/j178/prek) | A cross-language developer tool is one static binary with no runtime. prek exists because pre-commit's Python dependency was a burden, which is the same reason keel left Python. |
 | [mise](https://mise.jdx.dev/dev-tools/backends/github.html) / [aqua](https://aquaproj.github.io/docs/) | Each repository pins tool versions; tools install from GitHub Releases named `<name>_<version>_<os>_<arch>.tar.gz`. |
+| [git-test](https://github.com/mhagger/git-test) | Key test results by the tested tree, not the commit, and keep them in the repository. |
+| [Go toolchains](https://go.dev/doc/toolchain), bazelisk | The binary on `PATH` runs the release the repository pins, downloading and verifying it if needed. |
+| Gradle test-retry, Playwright | Re-run only what failed, report a first-attempt failure even when a retry passes, and never retry a mass failure. |
 | [regression-witness](https://github.com/qjf1597300-cloud/regression-witness) | Judge before/after runs from JUnit XML rather than text. The exit code must agree with the report, and repeated runs must agree. Missing, skipped and errored tests are never evidence. |
 | SWE-bench FAIL_TO_PASS | A fix is evidenced by named tests that fail before it and pass after it. |
 | [testscript](https://github.com/rogpeppe/go-internal) (go-internal) | keel's end-to-end tests are scripted scenario repositories, the way the Go team tests the `go` command. |

@@ -1,0 +1,47 @@
+# A step with `retries` re-runs each test that failed in the full run on its
+# own. Every lone run passing makes it a flake: it is named in the receipt
+# and in the record, and does not fail the step. A test that fails alone too
+# is a real failure, and so is any failure in a step without retries.
+repo
+exec sh -c 'echo "check racy \"\$([ -z \"\$filter\" ] && echo loaded || echo \$value)\"" >> tests/cases.sh'
+commit 'test: a test that fails only under load'
+
+# Without retries a flake fails the gate, and the failure is named.
+! exec keel gate
+stdout 'failed: racy'
+stdout 'unit=101\[2p/1f\]'
+
+# With retries it is a flake.
+exec sh -c 'sed "s/^cmd = \[\"sh\", \"tests\/run.sh\", \"\"\]$/&\nretries = 2/" keel.toml > t && mv t keel.toml'
+grep '^retries = 2$' keel.toml
+cp card.md docs/tasks/chore-a.md
+commit 'docs(tasks): open chore-a'
+exec keel gate --record docs/tasks/chore-a.md
+stdout 'retry racy: passed alone 2/2: a flake'
+stdout 'unit=0\[2p/0f/1flaky\]'
+stdout 'flaky: unit: racy'
+exec sh -c 'git log --format=%B $(git for-each-ref --format="%(objectname)" refs/keel/gate/) | grep "flaky: unit: racy"'
+
+# A real failure fails alone too, and still fails the gate.
+setvalue 3
+! exec keel gate
+stdout 'retry adds_two: failed alone \(0/2 passed\): a real failure'
+stdout ' fail '
+
+# More failures than max_flaky are a broken build: not retried at all.
+exec sh -c 'sed "s/^retries = 2$/retries = 2\nmax_flaky = 1/" keel.toml > t && mv t keel.toml'
+! exec keel gate
+! stdout 'retry '
+
+-- card.md --
+---
+type: chore
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据

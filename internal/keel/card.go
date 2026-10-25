@@ -268,16 +268,39 @@ func LoadCard(root, path string) (*Card, error) {
 	return ParseCard(string(b), rel(root, p)), nil
 }
 
-var resultRe = regexp.MustCompile(`(?:^|\s)([\w.-]+)=(\d+)`)
+var resultRe = regexp.MustCompile(`(?:^|\s)([\w.-]+)=(\d+)(\(base\))?`)
 
-// ReceiptCovers: a receipt proves completion only if every configured step
+// ReceiptRule is what a card's receipt must cover: every step of the gate
+// (and of the tiers the card asks for). An external step may instead show a
+// failure its anchor shares, `name=N(base)`.
+type ReceiptRule struct {
+	Steps    []string
+	External map[string]bool
+}
+
+// ReceiptRuleFor: the steps without a tier plus those of the card's tiers.
+func (c *Config) ReceiptRuleFor(card *Card) ReceiptRule {
+	r := ReceiptRule{Steps: c.StepNames(cardTiers(card)...), External: map[string]bool{}}
+	for _, s := range c.Gate.Step {
+		if s.External {
+			r.External[s.Name] = true
+		}
+	}
+	return r
+}
+
+// ReceiptCovers: a receipt proves completion only if every required step
 // ran and exited 0. A partial or hand-trimmed receipt that says ok must not.
-func ReceiptCovers(results string, steps []string) bool {
+func ReceiptCovers(results string, rule ReceiptRule) bool {
 	found := map[string]string{}
 	for _, m := range resultRe.FindAllStringSubmatch(results, -1) {
-		found[m[1]] = m[2]
+		if m[2] == "0" || (m[3] != "" && rule.External[m[1]]) {
+			found[m[1]] = "0"
+		} else {
+			found[m[1]] = m[2]
+		}
 	}
-	for _, s := range steps {
+	for _, s := range rule.Steps {
 		if found[s] != "0" {
 			return false
 		}
@@ -287,7 +310,8 @@ func ReceiptCovers(results string, steps []string) bool {
 
 var nameRe = map[string]*regexp.Regexp{}
 
-func LintCard(c *Card, requiredSteps []string) []string {
+func LintCard(c *Card, rule ReceiptRule) []string {
+	requiredSteps := rule.Steps
 	probs := append([]string{}, c.Errors...)
 	m := c.Meta
 	if len(m) == 0 {
@@ -388,7 +412,7 @@ func LintCard(c *Card, requiredSteps []string) []string {
 		} else if len(requiredSteps) > 0 {
 			covered := false
 			for _, r := range oks {
-				if ReceiptCovers(r, requiredSteps) {
+				if ReceiptCovers(r, rule) {
 					covered = true
 					break
 				}

@@ -1,0 +1,89 @@
+# A step with a tier runs only in `gate --tier <tier>`: slow suites and
+# release builds stay out of every card's gate. A card that needs one asks
+# with `gate: <tier>`; its receipt must then cover that tier. An external
+# step that its card's anchor fails too does not block that card.
+repo
+exec sh -c 'printf "%s\n" "" "[[gate.step]]" "name = \"slow\"" "cmd = [\"sh\", \"-c\", \"echo slow; exit 0\"]" "tier = \"release\"" "" "[[gate.step]]" "name = \"deny\"" "cmd = [\"sh\", \"-c\", \"test ! -f advisory\"]" "external = true" >> keel.toml'
+commit 'gate tiers'
+
+# The default gate skips the tier.
+exec keel gate
+! stdout 'slow'
+exec keel gate --tier release
+stdout 'slow=0'
+! exec keel gate --tier nightly
+stderr 'unknown tier `nightly`'
+
+# A card asking for the tier must be recorded with it.
+cp release.md docs/tasks/chore-rel.md
+commit 'docs(tasks): open chore-rel'
+! exec keel gate --record docs/tasks/chore-rel.md
+stderr 'asks for the `release` tier'
+exec keel gate --tier release --record docs/tasks/chore-rel.md
+exec sh -c 'sed -i.bak "s/status: doing/status: done/" docs/tasks/chore-rel.md && rm docs/tasks/chore-rel.md.bak'
+exec keel lint docs/tasks/chore-rel.md
+cp release-typo.md docs/tasks/chore-typo.md
+! exec keel lint docs/tasks/chore-typo.md
+stdout 'names a tier no gate step has'
+
+# An advisory published upstream, not by this card: the anchor fails too.
+exec git checkout -q -- docs/tasks/chore-rel.md
+exec sh -c 'touch advisory && git add advisory && git commit -q --no-verify -m "an upstream advisory appears"'
+cp plain.md docs/tasks/chore-dep.md
+commit 'docs(tasks): open chore-dep'
+exec keel gate --record docs/tasks/chore-dep.md
+stdout 'anchor [0-9a-f]{12} fails this step too'
+grep 'deny=1\(base\)' docs/tasks/chore-dep.md
+exec sh -c 'sed -i.bak "s/status: doing/status: done/" docs/tasks/chore-dep.md && rm docs/tasks/chore-dep.md.bak'
+exec keel lint docs/tasks/chore-dep.md
+
+# The same failure caused by the card itself blocks it.
+exec git rm -q advisory
+exec git commit -q --no-verify -m 'clear'
+cp plain.md docs/tasks/chore-own.md
+commit 'docs(tasks): open chore-own'
+exec touch advisory
+! exec keel gate --record docs/tasks/chore-own.md
+stdout 'deny=1 '
+! stdout '\(base\)'
+
+-- release.md --
+---
+type: chore
+status: doing
+weight: light
+created: 2026-01-01
+gate: release
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据
+RED: none — process only
+-- release-typo.md --
+---
+type: chore
+status: todo
+weight: light
+created: 2026-01-01
+gate: relaese
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据
+-- plain.md --
+---
+type: chore
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据
+RED: none — process only

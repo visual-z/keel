@@ -1,0 +1,84 @@
+# A GATE receipt is backed by a record of the tree it tested. A card that
+# becomes done needs a receipt with a record whose tree is still the tree
+# being closed. Markdown outside the tests (closing notes, the card) is not
+# bound, so writing up the evidence after the gate needs no second run.
+repo
+exec keel adopt
+exec sh -c 'echo map > AGENTS.md'
+cp card.md docs/tasks/chore-a.md
+commit 'docs(tasks): open chore-a'
+
+# Hand-written: looks right, has no record.
+exec sh -c 'cat card.md > docs/tasks/chore-a.md; sed -i.bak "s/status: doing/status: done/" docs/tasks/chore-a.md; rm docs/tasks/chore-a.md.bak'
+exec sh -c 'echo "GATE: 0123456789ab+dirty ok tree:0123456789ab unit=0[2p/0f] guard=0 (2026-01-01)" >> docs/tasks/chore-a.md'
+! exec keel lint docs/tasks/chore-a.md
+stdout 'has no record under refs/keel/gate/'
+
+# An old-format receipt (no tree) cannot close a card any more.
+cp card.md docs/tasks/chore-a.md
+exec sh -c 'sed -i.bak "s/status: doing/status: done/" docs/tasks/chore-a.md; rm docs/tasks/chore-a.md.bak; echo "GATE: 0123456789ab ok unit=0[2p/0f] (2026-01-01)" >> docs/tasks/chore-a.md'
+! exec keel lint docs/tasks/chore-a.md
+stdout 'not bound to a tested tree'
+
+# The real thing: record, then close with notes added afterwards.
+cp card.md docs/tasks/chore-a.md
+exec keel gate --record docs/tasks/chore-a.md
+stdout 'recorded in'
+exec git for-each-ref refs/keel/gate/
+stdout 'commit'
+exec sh -c 'sed -i.bak "s/status: doing/status: done/" docs/tasks/chore-a.md; rm docs/tasks/chore-a.md.bak; echo "closing notes" >> docs/tasks/chore-a.md; echo notes > NOTES.md'
+exec keel lint docs/tasks/chore-a.md
+
+# Code changed after the gate: the receipt is stale.
+setvalue 4b
+! exec keel lint docs/tasks/chore-a.md
+stdout 'stale: calc.txt changed after the gate ran'
+setvalue 4
+
+# Deleting a tracked file after the gate is a change.
+exec rm calc.txt
+! exec keel lint docs/tasks/chore-a.md
+stdout 'stale: calc.txt'
+setvalue 4
+
+# Tests are always bound, whatever their extension.
+exec sh -c 'echo "# note" >> tests/cases.sh'
+! exec keel lint docs/tasks/chore-a.md
+stdout 'stale: tests/cases.sh'
+exec git checkout -q -- tests/cases.sh
+
+# The hook judges what is being committed, not the working tree: a change
+# left unstaged does not make the commit's receipt stale, a staged one does.
+# An untracked file present during the gate but left out of the commit is
+# not a change to what was tested.
+exec sh -c 'mkdir -p dist && echo build > dist/out'
+exec keel gate --record docs/tasks/chore-a.md
+exec sh -c 'sed -i.bak "s/status: doing/status: done/" docs/tasks/chore-a.md; rm docs/tasks/chore-a.md.bak'
+setvalue 4b
+exec git add calc.txt
+! exec git commit -q -m 'chore: close chore-a'
+stderr 'stale: calc.txt'
+exec git reset -q calc.txt
+exec git add docs NOTES.md
+exec git commit -q -m 'chore: close chore-a'
+exec git show --stat HEAD
+! stdout dist/
+exec git log --format=%s -1
+stdout 'chore: close chore-a'
+
+# Once done in history it is not re-judged: later code changes are fine.
+exec keel lint docs/tasks/chore-a.md
+
+-- card.md --
+---
+type: chore
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据
+RED: none — process only

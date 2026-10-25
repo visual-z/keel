@@ -36,7 +36,7 @@ go install github.com/visual-z/keel/cmd/keel@v1.0.2 # 有 Go 工具链时
 
 也可以从 [Releases](https://github.com/visual-z/keel/releases) 下载对应平台的压缩包，并用 `checksums.txt` 核对。
 
-每个仓库都在 `keel.toml` 里钉住所用的版本（`[keel] version = "1.0.2"`）。版本不一致时 keel 拒绝运行，所以结论不会取决于 PATH 上碰巧是哪个 keel。
+每个仓库都在 `keel.toml` 里钉住所用的版本（`[keel] version = "1.0.2"`）。PATH 上的其他版本会切换到这个版本运行，做法同 `GOTOOLCHAIN=auto` 与 bazelisk：从 Release 安装，核对 `checksums.txt`，然后运行。结论不会取决于 PATH 上碰巧是哪个 keel。`KEEL_TOOLCHAIN=local` 表示不下载。
 
 ## 开始一个项目
 
@@ -53,10 +53,11 @@ keel new feat skeleton
 | 命令 | 检查的声明 |
 |---|---|
 | `verify-red <卡>` | 「这个测试修复前是红的」：在 RED commit 的临时 worktree 里重跑，必须红；在当前工作树里，必须绿。设了 `repeat = N` 时，每一次都必须一致。编译错误、加载错误、跳过或选中 0 个测试、超时、崩溃、退出码和报告对不上，都不算红。 |
-| `verify-red`（故障补丁） | 「测试真能抓住这个 bug」：把卡里的 `keel-inject` 补丁打到 HEAD 上，测试必须变红。补丁只能改产品代码，不能改测试。文件移动之前写的补丁，打到文件现在的位置上。 |
+| `verify-red`（故障补丁） | 「测试真能抓住这个 bug」：把卡里的 `keel-inject` 补丁打到 HEAD 上，测试必须变红。补丁只能改产品代码，不能改测试。补丁打不上时，就在它能打上的那个提交上提交故障，再用三方合并带到 HEAD，文件移动、上下文挪位都能跟过去；故障所在的代码已经被重写时，如实报告，不去猜。 |
 | `freeze-check` | 「完成定义没有放宽」：和开卡那次提交对比，判据只能增加；要修改，必须由作者确认。 |
-| `assert-guard` | 「没有弱化测试」：在 diff 里查删掉的断言、新增的 skip/only、测试里的早退出和 `__eq__` 覆盖，以及被删的测试文件。移动过的测试与它原来的内容比较，所以单纯调整目录不会报错；把测试移出测试路径，等同于删除。 |
-| `gate --record <卡>` | 「全部检查通过」：直接读每一步的退出码，只统计真正执行了的测试（执行 0 个就算失败），然后在卡里写一行回执。只跑了部分步骤的结果不能写进去。 |
+| `assert-guard` | 「没有弱化测试」：在 diff 里查删掉的断言、新增的 skip/only、测试里的早退出和 `__eq__` 覆盖，以及被删的测试文件。移动过的测试与它原来的内容比较，所以单纯调整目录不会报错；把测试移出测试路径，等同于删除。`--card` 从开卡提交比起；在主干上合并基点就是 HEAD 本身，这时也照样有效。 |
+| `gate --record <卡>` | 「全部检查通过」：直接读每一步的退出码，只统计真正执行了的测试（执行 0 个就算失败），并列出失败的测试名。步骤可以单独重跑失败的测试（`retries`）：单独跑每次都通过的算偶发，名字写进回执；单独跑也失败的是真失败。`--record` 还会从开卡提交起检查有没有弱化测试，并且只记录通过的 gate：被测的树提交到 `refs/keel/gate/` 下，回执里写明这棵树。卡只能用「树就是当前要关闭的树」的回执来关闭，所以手写的回执、过期的回执都不算；gate 之后才写的收尾说明不会让回执过期。 |
+| `replay [--since REV]` | 「测试仍然抓得住曾经抓住的每个故障」：把每张卡的故障补丁重新打到 HEAD 上，必须红；抓不住的就失败。 |
 | `audit-red` | 每条声明（存量卡里的也算）指向的 commit 都还在，并且已钉在 `refs/keel/red/` 下。 |
 | `lint`、`check-docs`、`check-boundaries` | 卡的结构与证据；文档预算、链接、地图里的过期路径、决策编号、注册表、词表；正则级的架构边界。 |
 
@@ -68,6 +69,9 @@ keel 认的是**测试的输出格式，而不是具体工具**：能用结构�
 |---|---|
 | [lefthook](https://github.com/evilmartians/lefthook)、[prek](https://github.com/j178/prek) | 跨语言的开发工具做成一个不依赖运行时的静态二进制。prek 正是为了摆脱 pre-commit 的 Python 依赖而重写的，和 keel 放弃 Python 是同一个理由。 |
 | [mise](https://mise.jdx.dev/dev-tools/backends/github.html) / [aqua](https://aquaproj.github.io/docs/) | 每个仓库钉住工具版本，从 GitHub Release 安装；产物命名为 `<名>_<版本>_<os>_<arch>.tar.gz`。 |
+| [git-test](https://github.com/mhagger/git-test) | 测试结果按被测的树而不是按 commit 记录，并存放在仓库里。 |
+| [Go toolchains](https://go.dev/doc/toolchain)、bazelisk | PATH 上的二进制运行仓库钉住的版本，必要时下载并校验。 |
+| Gradle test-retry、Playwright | 只重跑失败的测试；重试通过了，第一次的失败也要记下来；大量失败时不重试。 |
 | [regression-witness](https://github.com/qjf1597300-cloud/regression-witness) | 用 JUnit XML 而不是文本来判定修复前后的结果；退出码必须和报告一致；多次运行必须一致；缺失、跳过、执行出错的测试都不算证据。 |
 | SWE-bench 的 FAIL_TO_PASS | 一个修复的证据，是指定的测试在修复前失败、修复后通过。 |
 | [testscript](https://github.com/rogpeppe/go-internal)（go-internal） | keel 自己的端到端测试写成脚本化的场景仓库，和 Go 团队测试 `go` 命令的方式一样。 |

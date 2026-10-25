@@ -2,7 +2,8 @@
 # (a monorepo layout change) reports nothing, while a weakening inside a moved
 # file, a test moved out of the test paths, or a file moved into them with its
 # early exit still count. A fault patch written before a move applies to the
-# moved file, and still may not edit tests.
+# moved file (git's three-way merge follows the move), and still may not
+# edit tests.
 repo
 exec sh -c 'printf "%s\n" "check adds_two 4" "check echoes_value \"\$value\"" "[ -n \"\$QUICK\" ] && exit 0" > tests/cases.sh'
 mkdir helpers
@@ -55,7 +56,7 @@ exec sh -c 'sed -e "s#calc.txt#lib/calc.txt#" -e "s#tests/cases.sh#tests/unit/ca
 commit 'move the product file'
 cp card.md docs/tasks/fix-a.md
 exec keel verify-red docs/tasks/fix-a.md
-stdout 'INJECT .*\(lib/calc.txt, renamed from calc.txt\)'
+stdout 'INJECT .*\(lib/calc.txt; merged from [0-9a-f]{12}\)'
 stdout '1 injected fault\(s\) verified'
 exec git status --porcelain lib/calc.txt
 ! stdout .

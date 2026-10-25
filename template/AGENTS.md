@@ -15,17 +15,18 @@
 ## 命令
 
 项目自己的构建与测试命令只写在 `keel.toml` 的 `[[gate.step]]` 里，下面的命令都从那里读。
-`keel` 的版本钉在 `keel.toml` 的 `[keel] version`，用 `mise install` 安装（见 `docs/KEEL.md`）；版本不符时 keel 拒绝运行。
+`keel` 的版本钉在 `keel.toml` 的 `[keel] version`；PATH 上的任何 keel 都会切换到这个版本运行（见 `docs/KEEL.md`）。
 
-- 全部检查：`keel gate`（第一条失败即停；`--record <卡>` 把回执写进卡）
+- 全部检查：`keel gate`（第一条失败即停，列出失败的测试；`--record <卡>` 把回执写进卡，并留下被测树的记录）
+- 发版前：`keel replay --since <上个 tag>`，确认故障补丁仍然能让测试变红
 - 开卡：`keel new <type> <slug> [--light]`
 - 验证 RED：`keel verify-red docs/tasks/<卡>.md`
-- 防弱化测试：`keel assert-guard`
+- 防弱化测试：`keel assert-guard --card docs/tasks/<卡>.md`（从开卡提交比起；`gate --record` 也会跑）
 - 完成定义冻结：`keel freeze-check`
 - 只变异改动过的代码：`keel mutate`
 - 完整手册：`docs/KEEL.md`
 
-**完成** = `gate` 全绿 + 本卡 `verify-red` 通过 + `assert-guard` 通过 + 卡里 author 类检查由作者确认。
+**完成** = 本卡 `gate --record` 全绿（含 guard）+ 本卡 `verify-red` 通过 + 卡里 author 类检查由作者确认。
 
 ## 边界
 

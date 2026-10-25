@@ -12,6 +12,12 @@ import (
 )
 
 func Lint(root string, cfg *Config, cards []string, w io.Writer) error {
+	return lint(root, cfg, cards, false, w)
+}
+
+// lint: in the pre-commit hook (staged=true) a card that becomes done is
+// judged against the index being committed, not the working tree.
+func lint(root string, cfg *Config, cards []string, staged bool, w io.Writer) error {
 	paths := cards
 	if len(paths) == 0 {
 		paths = CardPaths(root, cfg)
@@ -22,7 +28,14 @@ func Lint(root string, cfg *Config, cards []string, w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if probs := LintCard(card, cfg.StepNames()); len(probs) > 0 {
+		probs := LintCard(card, cfg.ReceiptRuleFor(card))
+		for _, t := range cardTiers(card) {
+			if !contains(cfg.Tiers(), t) {
+				probs = append(probs, fmt.Sprintf("`gate: %s` names a tier no gate step has; declared: %s", t, orStr(strings.Join(cfg.Tiers(), ", "), "none")))
+			}
+		}
+		probs = append(probs, closingProblems(root, cfg, card, staged)...)
+		if len(probs) > 0 {
 			failed++
 			fmt.Fprintf(w, "FAIL  %s\n", card.Rel)
 			for _, pr := range probs {
@@ -178,7 +191,10 @@ func anyMatch(res []*regexp.Regexp, s string) bool {
 // AssertGuard: agents most often "finish" by weakening tests — deleting
 // assertions, adding skips, exiting before the asserts run, or overriding
 // equality. Count them in the diff against the merge base.
-func AssertGuard(root string, cfg *Config, base string, w io.Writer) error {
+//
+// With a card, the diff starts at the card's anchor (see CardAnchor), so it
+// covers the card's whole work whichever branch it was committed on.
+func AssertGuard(root string, cfg *Config, base, card string, w io.Writer) error {
 	t := cfg.Tests
 	scope := append(append([]string{}, t.Paths...), t.InlinePaths...)
 	if len(scope) == 0 {
@@ -188,10 +204,7 @@ func AssertGuard(root string, cfg *Config, base string, w io.Writer) error {
 		fmt.Fprintln(w, "assert-guard: no commit yet, nothing to compare against")
 		return nil
 	}
-	if base == "" {
-		base = cfg.Guard.Base
-	}
-	mb, err := MergeBase(root, base)
+	mb, label, err := guardBase(root, cfg, base, card)
 	if err != nil {
 		return err
 	}
@@ -339,7 +352,10 @@ func AssertGuard(root string, cfg *Config, base string, w io.Writer) error {
 			probs = append(probs, fmt.Sprintf("%s: %d early-exit or always-equal pattern(s) added", f, s.suspAdd))
 		}
 	}
-	fmt.Fprintf(w, "assert-guard: diff against %s, %d test file(s) touched, %d problem(s)\n", mb[:12], len(stats), len(probs))
+	fmt.Fprintf(w, "assert-guard: diff against %s (%s), %d test file(s) touched, %d problem(s)\n", mb[:12], label, len(stats), len(probs))
+	if head, _ := ResolveCommit(root, "HEAD"); card == "" && mb == head {
+		fmt.Fprintln(w, "      note: HEAD is on the base branch itself, so only uncommitted changes were compared; --card <card> compares from where the card opened")
+	}
 	if len(probs) > 0 {
 		return failf("%s\n      If intended, the card must say `WEAKEN-OK: <path> <reason>（作者确认 YYYY-MM-DD）`", strings.Join(probs, "\n"))
 	}

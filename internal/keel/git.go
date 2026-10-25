@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 // Live throwaway worktrees. An interrupt must not leave them registered in
@@ -21,6 +22,12 @@ var (
 type Worktree struct {
 	Root, Path string
 	links      []string
+	// Drift lists the configured lockfiles that differ between rev and the
+	// working tree: dependencies linked from the working tree were installed
+	// for other code, so a red there may be the dependencies' doing.
+	Drift []string
+	// Prepared: the worktree installed its own dependencies (red.prepare).
+	Prepared bool
 }
 
 func installSignalCleanup() {
@@ -39,10 +46,11 @@ func installSignalCleanup() {
 	})
 }
 
-// NewWorktree checks rev out into a temporary directory and links the
-// configured dependency directories (a fresh checkout has no node_modules;
-// load errors from missing deps must not be read as red).
-func NewWorktree(root, rev string, links []string) (*Worktree, error) {
+// NewWorktree checks rev out into a temporary directory and gives it
+// dependencies: linked from the working tree (a fresh checkout has none, and
+// load errors from missing deps must not be read as red), or, when the
+// lockfiles differ and red.prepare is set, installed for rev itself.
+func NewWorktree(root, rev string, red RedConfig) (*Worktree, error) {
 	installSignalCleanup()
 	dir, err := os.MkdirTemp("", "keel-red-")
 	if err != nil {
@@ -53,7 +61,25 @@ func NewWorktree(root, rev string, links []string) (*Worktree, error) {
 		return nil, failf("could not create a worktree at %s: %s", rev, out)
 	}
 	w := &Worktree{Root: root, Path: dir}
-	for _, name := range links {
+	liveMu.Lock()
+	live[dir] = w
+	liveMu.Unlock()
+	for _, lock := range red.Lockfiles {
+		then, _ := gitShow(root, rev, lock)
+		if then != readFile(filepath.Join(root, lock)) {
+			w.Drift = append(w.Drift, lock)
+		}
+	}
+	if len(w.Drift) > 0 && len(red.Prepare) > 0 {
+		res, err := Run(filepath.Join(dir, red.Cwd), TestEnv(root, red, true, ""), time.Duration(red.TimeoutS)*time.Second, "", red.Prepare[0], red.Prepare[1:]...)
+		if err != nil || res.Code != 0 {
+			w.Close()
+			return nil, failf("red.prepare failed in the worktree at %s (exit %d): a worktree without its dependencies cannot certify a red\n%s", rev[:12], res.Code, tail(res.Out, 12))
+		}
+		w.Prepared = true
+		return w, nil
+	}
+	for _, name := range red.Link {
 		src, dst := filepath.Join(root, name), filepath.Join(dir, name)
 		if exists(src) && !exists(dst) {
 			_ = os.MkdirAll(filepath.Dir(dst), 0o755)
@@ -62,10 +88,18 @@ func NewWorktree(root, rev string, links []string) (*Worktree, error) {
 			}
 		}
 	}
-	liveMu.Lock()
-	live[dir] = w
-	liveMu.Unlock()
 	return w, nil
+}
+
+// DriftNote is what a reader of a red run must know about its dependencies.
+func (w *Worktree) DriftNote() string {
+	switch {
+	case w.Prepared:
+		return "dependencies installed for this commit (red.prepare): " + strings.Join(w.Drift, ", ") + " differ from the working tree"
+	case len(w.Drift) > 0:
+		return "note: " + strings.Join(w.Drift, ", ") + " differ from the working tree; the linked dependencies were installed for other code (set red.prepare to install them per commit)"
+	}
+	return ""
 }
 
 func (w *Worktree) remove() {
@@ -168,6 +202,27 @@ func gitShow(root, sha, path string) (string, bool) {
 	return r.Stdout, true
 }
 
+// tempIndex is a path for a private index file inside the git directory,
+// never in the working tree: a temporary file there would be swept into the
+// very tree it is used to write (TMPDIR may point into the repository).
+func tempIndex(root string) (string, func(), error) {
+	dir, _ := Git(root, "rev-parse", "--git-dir")
+	if dir == "" {
+		return "", nil, failf("not a git repository")
+	}
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(root, dir)
+	}
+	f, err := os.CreateTemp(dir, "keel-index-")
+	if err != nil {
+		return "", nil, err
+	}
+	name := f.Name()
+	f.Close()
+	os.Remove(name)
+	return name, func() { os.Remove(name) }, nil
+}
+
 func HeadLabel(root string) string {
 	sha, ok := Git(root, "rev-parse", "--short=12", "HEAD")
 	if !ok {
@@ -177,4 +232,24 @@ func HeadLabel(root string) string {
 		sha += "+dirty"
 	}
 	return sha
+}
+
+// RenamesUpTo maps every path ever renamed in the history of rev to where it
+// lives at rev, following chains (a → b → c gives a → c and b → c).
+func RenamesUpTo(root, rev string) map[string]string {
+	out, _ := Git(root, "-c", "core.quotePath=false", "log", "--find-renames", "--diff-filter=R", "--name-status", "--format=", "--reverse", rev)
+	where := map[string]string{}
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Split(line, "\t")
+		if len(f) != 3 || !strings.HasPrefix(f[0], "R") {
+			continue
+		}
+		for k, v := range where {
+			if v == f[1] {
+				where[k] = f[2]
+			}
+		}
+		where[f[1]] = f[2]
+	}
+	return where
 }

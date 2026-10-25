@@ -166,7 +166,7 @@ func Adopt(root, stack string, w io.Writer) error {
 		if err != nil {
 			return err
 		}
-		if len(LintCard(c, cfg.StepNames())) > 0 {
+		if len(LintCard(c, cfg.ReceiptRuleFor(c))) > 0 {
 			legacy = append(legacy, filepath.Base(p))
 		}
 	}

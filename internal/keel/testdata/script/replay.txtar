@@ -1,0 +1,94 @@
+# A fault is carried to HEAD by git's three-way merge, from the fault as it
+# was first verified (retained under refs/keel/fault/) or from the newest
+# ancestor the patch applies to. Context that drifted merges; code that was
+# rewritten under the fault is reported, not guessed at; a fault the tests
+# no longer catch fails the replay.
+repo
+cp calc6.txt calc.txt
+commit 'a longer calc'
+cp card.md docs/tasks/fix-a.md
+commit 'docs(tasks): open fix-a'
+exec keel verify-red docs/tasks/fix-a.md
+stdout 'applied to'
+exec git for-each-ref refs/keel/fault/
+stdout commit
+
+# The context drifted (line 5): the patch no longer applies, the merge does.
+exec sh -c 'sed "5s/B/b/" calc.txt > t && mv t calc.txt'
+commit 'touch nearby'
+exec keel replay
+stdout 'red     docs/tasks/fix-a.md:\d+ adds_two \(merged from [0-9a-f]{12}\)'
+stdout '1 fault\(s\) still red'
+exec keel verify-red docs/tasks/fix-a.md
+
+# Without the retained fault, the newest ancestor it applies to is found.
+exec sh -c 'git for-each-ref --format="delete %(refname)" refs/keel/fault/ | git update-ref --stdin'
+exec keel replay docs/tasks/fix-a.md
+stdout '1 fault\(s\) still red'
+
+# The code under the fault was rewritten: reported, fails only --strict.
+exec sh -c 'sed "3s/# end/# END/" calc.txt > t && mv t calc.txt'
+commit 'rewrite the line next to the fault'
+exec keel replay
+stdout 'skip    docs/tasks/fix-a.md'
+stdout 'no longer merges onto'
+stdout '1 cannot be replayed'
+! exec keel replay --strict
+
+# A replayed fault may not edit tests either.
+cp card-test.md docs/tasks/fix-t.md
+exec keel replay docs/tasks/fix-t.md
+stdout 'refuse  docs/tasks/fix-t.md:\d+ adds_two: the fault edits tests \(tests/cases.sh\)'
+! exec keel replay --strict docs/tasks/fix-t.md
+exec rm docs/tasks/fix-t.md
+
+# --since limits the replay to cards changed since a revision.
+exec git tag v1
+exec keel replay --since v1
+stdout 'replay: 0 fault'
+
+# The tests no longer catch the fault: the replay fails.
+exec sh -c 'sed "3s/# END/# end/" calc.txt > t && mv t calc.txt'
+exec sh -c 'printf "%s\n" "check adds_two \"\$value\"" "check echoes_value \"\$value\"" > tests/cases.sh'
+commit 'test: weaken'
+! exec keel replay
+stdout 'GREEN   docs/tasks/fix-a.md:\d+ adds_two .*no longer catch'
+
+-- calc6.txt --
+# calc
+4
+# end
+A
+B
+C
+-- card.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据
+```diff keel-inject adds_two
+--- a/calc.txt
++++ b/calc.txt
+@@ -1,5 +1,5 @@
+ # calc
+-4
++5
+ # end
+ A
+ B
+```
+-- card-test.md --
+```diff keel-inject adds_two
+--- a/tests/cases.sh
++++ b/tests/cases.sh
+@@ -1,1 +1,1 @@
+-check adds_two 4
++check adds_two 5
+```

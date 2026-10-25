@@ -1,0 +1,62 @@
+# On trunk the merge base with the base branch is HEAD itself, so a plain
+# assert-guard sees nothing committed. --card compares from where the card
+# opened, whichever branch it was committed on; an earlier `baseline:` can
+# widen that, a later one cannot narrow it.
+repo
+cp card.md docs/tasks/fix-a.md
+commit 'docs(tasks): open fix-a' OPEN
+exec sh -c 'grep -v adds_two tests/cases.sh > t && mv t tests/cases.sh'
+commit 'test: weaken on trunk'
+
+exec keel assert-guard
+stdout '0 problem'
+stdout 'only uncommitted changes were compared; --card'
+
+! exec keel assert-guard --card docs/tasks/fix-a.md
+stdout 'freeze commit [0-9a-f]{12} of docs/tasks/fix-a.md'
+stderr 'tests/cases.sh: assertions dropped'
+
+# The gate guards the card it records, from its anchor: a weakening already
+# committed on trunk is not recordable.
+! exec keel gate --record docs/tasks/fix-a.md
+stdout 'guard=1'
+stdout 'not recorded'
+! grep 'GATE:' docs/tasks/fix-a.md
+
+# A baseline after the freeze commit cannot narrow the diff.
+expand late.tmpl docs/tasks/fix-a.md
+! exec keel assert-guard --card docs/tasks/fix-a.md
+stdout 'freeze commit'
+
+# A card never committed and naming no baseline has no anchor.
+cp card.md docs/tasks/fix-b.md
+! exec keel assert-guard --card docs/tasks/fix-b.md
+stderr 'fix-b.md has no anchor'
+! exec keel assert-guard --base main --card docs/tasks/fix-a.md
+stderr 'exclusive'
+
+-- card.md --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据
+-- late.tmpl --
+---
+type: fix
+status: doing
+weight: light
+created: 2026-01-01
+baseline: HEAD
+---
+## 问题
+## 完成定义
+- **D1** x
+  - 检：test `adds_two`
+## 证据

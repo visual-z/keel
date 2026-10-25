@@ -221,7 +221,8 @@ func CheckDocs(root string, cfg *Config, w io.Writer) error {
 		maps = []string{d.Agents, d.Fixtures, d.Invariants}
 	}
 	files := TrackedFiles(root)
-	checked := 0
+	checked, followed := 0, 0
+	var renames map[string]string
 	for _, relPath := range files {
 		if !strings.HasSuffix(relPath, ".md") || legacy[relPath] || GlobMatch(relPath, d.LinkExclude) {
 			continue
@@ -241,6 +242,17 @@ func CheckDocs(root string, cfg *Config, w io.Writer) error {
 			case strings.HasPrefix(path, "/"):
 				probs = append(probs, fmt.Sprintf("%s: absolute link `%s` (machine-specific; it also leaks local paths)", relPath, target))
 			case path != "" && !exists(filepath.Join(dir, path)):
+				// A record of its day keeps its links; one whose target moved
+				// is followed through git's renames instead of rewritten.
+				if GlobMatch(relPath, d.Historical) {
+					if renames == nil {
+						renames = RenamesUpTo(root, "HEAD")
+					}
+					if to, ok := renames[rel(root, filepath.Join(dir, path))]; ok && exists(filepath.Join(root, to)) {
+						followed++
+						continue
+					}
+				}
 				probs = append(probs, fmt.Sprintf("%s: broken link `%s`", relPath, target))
 			}
 		}
@@ -297,7 +309,11 @@ func CheckDocs(root string, cfg *Config, w io.Writer) error {
 		probs = append(probs, fmt.Sprintf("%s: entries must be newest first; %s", d.Progress, strings.Join(bad, ", ")))
 	}
 	probs = append(probs, checkGlossary(root, d.Glossary, d.GlossarySourceDirs, files)...)
-	fmt.Fprintf(w, "check-docs: %d markdown file(s) checked, %d problem(s)\n", checked, len(probs))
+	note := ""
+	if followed > 0 {
+		note = fmt.Sprintf(", %d moved link(s) in historical documents followed", followed)
+	}
+	fmt.Fprintf(w, "check-docs: %d markdown file(s) checked, %d problem(s)%s\n", checked, len(probs), note)
 	if len(probs) > 0 {
 		return failf("%s", strings.Join(probs, "\n"))
 	}

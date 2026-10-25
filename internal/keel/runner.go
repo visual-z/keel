@@ -19,6 +19,10 @@ import (
 type Summary struct {
 	Selected, Failed, Skipped int
 	Invalid                   string // non-empty: the output cannot certify anything
+	// FailedNames are the failed tests as the format names them, where it
+	// names them (bun, cargo, go-json, junit); gate prints them and retries
+	// them one by one.
+	FailedNames []string
 }
 
 // Runners are output formats, not tools. Structured formats (go test -json,
@@ -55,6 +59,7 @@ func sum(xs []int) int {
 var (
 	cargoInvalid = regexp.MustCompile(`(?m)^error\[E\d+\]:|^error: could not compile|^error: linking with`)
 	cargoResult  = regexp.MustCompile(`(?m)^test result: \w+\. (\d+) passed; (\d+) failed; (\d+) ignored`)
+	cargoFailed  = regexp.MustCompile(`(?m)^test (\S+) \.\.\. FAILED\s*$`)
 )
 
 // ParseCargo counts from `test result:` lines, never `running N`: N includes
@@ -74,6 +79,9 @@ func ParseCargo(out string) Summary {
 		s.Failed += f
 		s.Skipped += i
 	}
+	for _, m := range cargoFailed.FindAllStringSubmatch(out, -1) {
+		s.FailedNames = append(s.FailedNames, m[1])
+	}
 	return s
 }
 
@@ -84,6 +92,7 @@ var (
 	bunErrors  = regexp.MustCompile(`(?m)^\s*\d+ errors?\s*$`)
 	bunRan     = regexp.MustCompile(`(?m)^Ran \d+ tests? across \d+ files?\.`)
 	bunFailTag = regexp.MustCompile(`(?m)^\(fail\) `)
+	bunFailed  = regexp.MustCompile(`(?m)^\(fail\) (.+?)(?: \[[\d.]+m?s\])?\s*$`)
 )
 
 // ParseBun requires exactly one normal summary. Loader errors, unhandled
@@ -102,6 +111,9 @@ func ParseBun(out string) Summary {
 	s := Summary{Selected: pass[0] + fail[0], Failed: fail[0], Skipped: sum(ints(bunSkip, out))}
 	if s.Failed > 0 && !bunFailTag.MatchString(out) {
 		return Summary{Invalid: "a failure count with no failed test"}
+	}
+	for _, m := range bunFailed.FindAllStringSubmatch(out, -1) {
+		s.FailedNames = append(s.FailedNames, m[1])
 	}
 	return s
 }
@@ -148,6 +160,7 @@ func ParseGoJSON(out string) Summary {
 			s.Selected++
 			s.Failed++
 			testFailIn[e.Package] = true
+			s.FailedNames = append(s.FailedNames, e.Package+" "+e.Test)
 		case e.Test != "" && e.Action == "skip":
 			s.Skipped++
 		}
@@ -222,6 +235,7 @@ func ParseJUnit(path string) Summary {
 			case len(c.Failure) > 0:
 				s.Selected++
 				s.Failed++
+				s.FailedNames = append(s.FailedNames, c.Name)
 			default:
 				s.Selected++
 			}

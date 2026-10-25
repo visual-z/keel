@@ -65,9 +65,15 @@ usage: keel [--root DIR] <command> [args]
   audit-red [--retain] [--json]
                                every claim names a retained commit (no test re-run)
   snapshot <path…>             commit HEAD + paths as a retained RED snapshot
-  assert-guard [--base B]      the diff weakens no test
-  gate [--record CARD] [--keep-going] [--only a,b]
-                               run every gate step, print a receipt
+  assert-guard [--base B | --card CARD]
+                               the diff (from the merge base, or from where the
+                               card opened) weakens no test
+  gate [--record CARD] [--tier T] [--keep-going] [--only a,b]
+                               run every gate step, print a receipt; --record
+                               binds it to the tested tree and guards the card
+  replay [card…] [--since REV] [--strict]
+                               re-apply every injected fault to HEAD: its tests
+                               must still go red
   check-docs                   map size, links, registries, decisions, glossary
   check-boundaries             regex boundary rules
   mutate [--base B]            the configured diff-scoped mutation tool
@@ -94,6 +100,10 @@ func Main(args []string, stdout, stderr io.Writer) int {
 			return 2
 		}
 		return 0
+	}
+	invocation = append([]string{}, args...)
+	if root != "" {
+		invocation = append([]string{"--root", root}, invocation...)
 	}
 	cmd, rest := args[0], args[1:]
 	if cmd == "version" || cmd == "--version" {
@@ -172,7 +182,9 @@ func loadPinned(root string, stderr io.Writer) (*Config, error) {
 	case have == "dev":
 		fmt.Fprintf(stderr, "keel: source build; keel.toml pins %s\n", want)
 	case have != want:
-		return nil, failf("this is keel %s but keel.toml pins %s; install it with\n  mise use github:visual-z/keel@%s\n  or: go install github.com/visual-z/keel/cmd/keel@v%s", have, want, want, want)
+		// Run the pinned release instead (see toolchain.go); returns only
+		// when that is impossible.
+		return nil, switchTo(want, have, stderr)
 	}
 	return cfg, nil
 }
@@ -260,14 +272,19 @@ func dispatch(root, cmd string, args []string, stdout, stderr io.Writer) error {
 		return Snapshot(root, cfg, pos, stdout)
 	case "assert-guard":
 		base := fs.String("base", "", "branch to compare with (default guard.base)")
+		card := fs.String("card", "", "compare from this card's anchor instead")
 		if _, err := parse(fs, args); err != nil {
 			return err
 		}
-		return AssertGuard(root, cfg, *base, stdout)
+		if *base != "" && *card != "" {
+			return usagef("--base and --card are exclusive")
+		}
+		return AssertGuard(root, cfg, *base, *card, stdout)
 	case "gate":
 		record := fs.String("record", "", "append the receipt to this card")
 		keep := fs.Bool("keep-going", false, "run every step even after a failure")
 		only := fs.String("only", "", "comma-separated steps")
+		tier := fs.String("tier", "", "also run the steps of this tier")
 		if _, err := parse(fs, args); err != nil {
 			return err
 		}
@@ -277,7 +294,15 @@ func dispatch(root, cmd string, args []string, stdout, stderr io.Writer) error {
 				steps = append(steps, s)
 			}
 		}
-		return Gate(root, cfg, gateOpts{record: *record, keepGoing: *keep, only: steps}, stdout)
+		return Gate(root, cfg, gateOpts{record: *record, keepGoing: *keep, only: steps, tier: *tier}, stdout)
+	case "replay":
+		since := fs.String("since", "", "only cards changed since this revision (a tag or commit)")
+		strict := fs.Bool("strict", false, "faults that cannot be replayed fail too")
+		pos, err := parse(fs, args)
+		if err != nil {
+			return err
+		}
+		return Replay(root, cfg, pos, replayOpts{since: *since, strict: *strict}, stdout)
 	case "check-docs":
 		return CheckDocs(root, cfg, stdout)
 	case "check-boundaries":
@@ -300,11 +325,11 @@ func dispatch(root, cmd string, args []string, stdout, stderr io.Writer) error {
 				name string
 				fn   func() error
 			}{
-				{"lint", func() error { return Lint(root, cfg, nil, stdout) }},
+				{"lint", func() error { return lint(root, cfg, nil, true, stdout) }},
 				{"freeze-check", func() error { return freezeCheck(root, cfg, nil, true, stdout) }},
 				{"check-docs", func() error { return CheckDocs(root, cfg, stdout) }},
 				{"check-boundaries", func() error { return CheckBoundaries(root, cfg, stdout) }},
-				{"assert-guard", func() error { return AssertGuard(root, cfg, "", stdout) }},
+				{"assert-guard", func() error { return AssertGuard(root, cfg, "", "", stdout) }},
 			} {
 				if err := step.fn(); err != nil {
 					fmt.Fprintf(stderr, "FAIL  %s\n", err)

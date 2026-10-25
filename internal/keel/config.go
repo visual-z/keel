@@ -43,6 +43,10 @@ type PathsSection struct {
 
 type GateSection struct {
 	Step []GateStep `toml:"step"`
+	// Unbound are paths a receipt is not bound to: editing them after the
+	// gate (closing notes, the card itself) does not make the receipt stale.
+	// Default: markdown outside the test paths; the hook still checks it.
+	Unbound []string `toml:"unbound"`
 }
 
 type GateStep struct {
@@ -51,6 +55,22 @@ type GateStep struct {
 	Runner   string   `toml:"runner"`
 	Cwd      string   `toml:"cwd"`
 	TimeoutS int      `toml:"timeout_s"`
+	// Tier: a step with a tier runs only in `gate --tier <tier>` (slow suites,
+	// release builds). A card asks for it with `gate: <tier>` in front matter.
+	Tier string `toml:"tier"`
+	// Retries: a test that failed in the full run is re-run alone this many
+	// times; if every run passes it is a flake, named in the receipt and the
+	// record, and does not fail the step. 0 (default) never retries.
+	Retries int `toml:"retries"`
+	// MaxFlaky: more failures than this are not retried (default 3): many
+	// failures at once are a broken build, not flakes.
+	MaxFlaky int `toml:"max_flaky"`
+	// Profile is the [red] profile whose command re-runs one test.
+	Profile string `toml:"profile"`
+	// External: the step depends on state outside the tree (an advisory
+	// database, the network). Recorded for a card, a failure that the card's
+	// anchor fails too is shown as `name=N(base)` and does not block.
+	External bool `toml:"external"`
 }
 
 // RedConfig says how to run one selection of tests. [red] is the default
@@ -64,6 +84,11 @@ type RedConfig struct {
 	TimeoutS  int               `toml:"timeout_s"`
 	Repeat    int               `toml:"repeat"`
 	RefPrefix string            `toml:"ref_prefix"`
+	// Lockfiles: when a snapshot's copy differs from the working tree's, the
+	// linked dependencies were installed for other code. With Prepare, the
+	// worktree installs its own instead of linking; without, keel warns.
+	Lockfiles []string `toml:"lockfiles"`
+	Prepare   []string `toml:"prepare"`
 	// custom runner only
 	SelectedRe string `toml:"selected_re"`
 	FailedRe   string `toml:"failed_re"`
@@ -98,7 +123,11 @@ type DocsSection struct {
 	Glossary           string   `toml:"glossary"`
 	GlossarySourceDirs []string `toml:"glossary_source_dirs"`
 	LinkExclude        []string `toml:"link_exclude"`
-	MapFiles           []string `toml:"map_files"`
+	// Historical documents are records of their day (research notes, closed
+	// cards). A link in one whose target has since moved is followed through
+	// git's renames instead of demanding the record be rewritten.
+	Historical []string `toml:"historical"`
+	MapFiles   []string `toml:"map_files"`
 }
 
 type MutateSection struct {
@@ -192,6 +221,12 @@ func mergeProfile(base, p RedConfig, set func(string) bool) RedConfig {
 	if set("ref_prefix") {
 		out.RefPrefix = p.RefPrefix
 	}
+	if set("lockfiles") {
+		out.Lockfiles = p.Lockfiles
+	}
+	if set("prepare") {
+		out.Prepare = p.Prepare
+	}
 	return out
 }
 
@@ -220,6 +255,11 @@ func (c *Config) applyDefaults() {
 	}
 	if d.PlaybookMaxRules == 0 {
 		d.PlaybookMaxRules = 120
+	}
+	for i := range c.Gate.Step {
+		if c.Gate.Step[i].MaxFlaky == 0 {
+			c.Gate.Step[i].MaxFlaky = 3
+		}
 	}
 	fill := func(r *RedConfig) {
 		r.Cwd = orStr(r.Cwd, ".")
@@ -261,11 +301,25 @@ func (c *Config) RedFor(profile string) (RedConfig, error) {
 	return p, nil
 }
 
-// StepNames lists the configured gate steps, in order.
-func (c *Config) StepNames() []string {
+// StepNames lists the gate steps a receipt must cover, in order: the steps
+// without a tier, plus those of the given tiers.
+func (c *Config) StepNames(tiers ...string) []string {
 	out := make([]string, 0, len(c.Gate.Step))
 	for _, s := range c.Gate.Step {
-		out = append(out, s.Name)
+		if s.Tier == "" || contains(tiers, s.Tier) {
+			out = append(out, s.Name)
+		}
+	}
+	return out
+}
+
+// Tiers lists the declared gate tiers.
+func (c *Config) Tiers() []string {
+	var out []string
+	for _, s := range c.Gate.Step {
+		if s.Tier != "" && !contains(out, s.Tier) {
+			out = append(out, s.Tier)
+		}
 	}
 	return out
 }
