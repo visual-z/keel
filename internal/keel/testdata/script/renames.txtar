@@ -16,6 +16,19 @@ exec git mv tests/cases.sh tests/unit/cases.sh
 exec keel assert-guard
 stdout '0 problem'
 
+# A layout change moves the tests and the test paths together: still clean,
+# because where a file came from is judged by the base's test paths.
+exec git mv tests spec
+exec sh -c 'sed "s#tests/\*\*#spec/**#" keel.toml > t && mv t keel.toml'
+exec keel assert-guard
+stdout '0 problem'
+exec git rm -q -r -f spec
+! exec keel assert-guard
+stderr 'tests/cases.sh: test file deleted'
+exec git reset -q --hard
+mkdir tests/unit
+exec git mv tests/cases.sh tests/unit/cases.sh
+
 # Moved and weakened in the same diff: charged to the new path.
 exec sh -c 'grep -v adds_two tests/unit/cases.sh > t && mv t tests/unit/cases.sh'
 ! exec keel assert-guard

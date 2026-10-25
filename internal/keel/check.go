@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/BurntSushi/toml"
 )
 
 func Lint(root string, cfg *Config, cards []string, w io.Writer) error {
@@ -248,6 +250,20 @@ func AssertGuard(root string, cfg *Config, base string, w io.Writer) error {
 			s.suspAdd++
 		}
 	}
+	// Where a file came from is judged by the test paths of the base: a layout
+	// change moves the tests and edits tests.paths in the same diff, and by
+	// today's paths alone every old location would look like it was never a
+	// test. Deletions count against either set.
+	baseScope, baseTests := scope, t.Paths
+	if old, ok := Git(root, "show", mb+":"+configFile); ok {
+		var prev struct {
+			Tests TestsSection `toml:"tests"`
+		}
+		if _, err := toml.Decode(old, &prev); err == nil && len(prev.Tests.Paths) > 0 {
+			baseScope = append(append([]string{}, prev.Tests.Paths...), prev.Tests.InlinePaths...)
+			baseTests = prev.Tests.Paths
+		}
+	}
 	type move struct{ from, to string }
 	var moves []move
 	current, renameFrom, inHeader := "", "", false
@@ -275,7 +291,7 @@ func AssertGuard(root string, cfg *Config, base string, w io.Writer) error {
 			continue
 		}
 		// A move across the edge is judged below, from the whole file.
-		if n := len(moves); n > 0 && moves[n-1].to == current && GlobMatch(moves[n-1].from, scope) != GlobMatch(current, scope) {
+		if n := len(moves); n > 0 && moves[n-1].to == current && GlobMatch(moves[n-1].from, baseScope) != GlobMatch(current, scope) {
 			continue
 		}
 		count(current, line)
@@ -283,13 +299,13 @@ func AssertGuard(root string, cfg *Config, base string, w io.Writer) error {
 	deleted, _ := Git(root, "-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=D", "--find-renames", mb, "--")
 	var probs []string
 	for _, f := range strings.Fields(deleted) {
-		if GlobMatch(f, t.Paths) && !allowed[f] {
+		if (GlobMatch(f, t.Paths) || GlobMatch(f, baseTests)) && !allowed[f] {
 			probs = append(probs, f+": test file deleted")
 		}
 	}
 	for _, m := range moves {
-		switch inFrom, inTo := GlobMatch(m.from, scope), GlobMatch(m.to, scope); {
-		case inFrom && !inTo && GlobMatch(m.from, t.Paths) && !allowed[m.from]:
+		switch inFrom, inTo := GlobMatch(m.from, baseScope), GlobMatch(m.to, scope); {
+		case inFrom && !inTo && GlobMatch(m.from, baseTests) && !allowed[m.from]:
 			probs = append(probs, fmt.Sprintf("%s: test file moved out of the test paths to %s", m.from, m.to))
 		case !inFrom && inTo:
 			whole, err := Run(root, nil, 0, "", "git", "diff", "--no-color", "--unified=0", "--no-renames", mb, "--", m.to)
